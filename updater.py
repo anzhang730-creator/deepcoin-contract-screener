@@ -19,6 +19,18 @@ RELEASES_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
 ASSET_NAME = "DeepcoinScreen-Windows.zip"
 
 
+def current_version() -> str:
+    if getattr(sys, "frozen", False):
+        version_file = Path(sys.executable).with_name("version.txt")
+        try:
+            value = version_file.read_text(encoding="ascii").strip()
+            if value:
+                return value
+        except OSError:
+            pass
+    return os.environ.get("DEEPCOIN_VERSION", CURRENT_VERSION)
+
+
 def _version(value: str) -> tuple[int, ...]:
     numbers = re.findall(r"\d+", value or "")
     return tuple(int(number) for number in numbers) or (0,)
@@ -71,7 +83,7 @@ def schedule_update_if_available() -> bool:
     try:
         release = _request_json(RELEASES_URL)
         tag = str(release.get("tag_name", ""))
-        if not tag or _version(tag) <= _version(CURRENT_VERSION):
+        if not tag or _version(tag) <= _version(current_version()):
             return False
         assets = release.get("assets") or []
         asset = next((item for item in assets if item.get("name") == ASSET_NAME), None)

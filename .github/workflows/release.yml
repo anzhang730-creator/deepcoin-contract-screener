@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-
 permissions:
   contents: write
 
@@ -21,7 +19,9 @@ jobs:
           python-version: "3.11"
       - name: Build package
         shell: pwsh
-        run: ./build_release.ps1
+        run: |
+          $env:DEEPCOIN_VERSION = "${{ github.ref_name }}"
+          ./build_release.ps1
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
