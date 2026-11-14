@@ -30,6 +30,10 @@ def is_ready() -> bool:
 
 
 def main() -> int:
+    # A second click should only focus the already-running local service.
+    if is_ready():
+        webbrowser.open(URL)
+        return 0
     if schedule_update_if_available():
         print("发现 Deepcoin 筛币器新版本，正在更新并重启。")
         return 0

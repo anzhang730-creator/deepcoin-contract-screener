@@ -4,6 +4,8 @@ $releaseRoot = Join-Path $projectRoot "release"
 $distRoot = Join-Path $projectRoot "dist"
 $exeName = "DeepcoinScreen"
 $releaseVersion = if ($env:DEEPCOIN_VERSION) { $env:DEEPCOIN_VERSION } else { "1.0.0" }
+$releaseVersion = $releaseVersion.Trim()
+if ($releaseVersion -notmatch '^v?\d+(\.\d+){0,2}$') { throw "DEEPCOIN_VERSION must look like 1.0.0 or v1.0.0" }
 
 Set-Location $projectRoot
 python -m pip install --upgrade pyinstaller
@@ -21,6 +23,7 @@ $batSource = Join-Path $projectRoot "start_deepcoin.bat"
 Copy-Item -LiteralPath $batSource -Destination (Join-Path $releaseRoot "start_deepcoin.bat")
 Copy-Item -LiteralPath (Join-Path $projectRoot "README.md") -Destination (Join-Path $releaseRoot "README.md")
 Set-Content -LiteralPath (Join-Path $releaseRoot "version.txt") -Value $releaseVersion -Encoding ascii
+if (-not (Test-Path (Join-Path $releaseRoot "version.txt"))) { throw "version.txt was not created" }
 
 $zipPath = Join-Path $projectRoot "DeepcoinScreen-Windows.zip"
 if (Test-Path $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
