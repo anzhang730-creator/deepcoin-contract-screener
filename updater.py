@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -21,6 +22,7 @@ REPOSITORY = os.environ.get(
 )
 CURRENT_VERSION = "1.0.0"
 RELEASES_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
+RELEASE_PAGE_URL = f"https://github.com/{REPOSITORY}/releases/latest"
 ASSET_NAME = "DeepcoinScreen-Windows.zip"
 MAX_ARCHIVE_BYTES = 250 * 1024 * 1024
 MAX_UNPACKED_BYTES = 500 * 1024 * 1024
@@ -62,6 +64,34 @@ def _request_json(url: str) -> dict:
     if not isinstance(value, dict):
         raise ValueError("invalid release response")
     return value
+
+
+def _latest_release() -> dict:
+    """Read the API first, then use GitHub's redirect when the API is rate-limited."""
+    try:
+        return _request_json(RELEASES_URL)
+    except urllib.error.HTTPError as error:
+        if error.code not in (403, 429):
+            raise
+    request = urllib.request.Request(
+        RELEASE_PAGE_URL,
+        headers={"User-Agent": "deepcoin-contract-screener"},
+    )
+    with urllib.request.urlopen(request, timeout=8) as response:
+        final_url = response.geturl()
+    match = re.search(r"/releases/tag/([^/?#]+)", urllib.parse.urlparse(final_url).path)
+    if not match:
+        raise ValueError("latest release redirect did not contain a tag")
+    tag = urllib.parse.unquote(match.group(1))
+    return {
+        "tag_name": tag,
+        "assets": [
+            {
+                "name": ASSET_NAME,
+                "browser_download_url": f"https://github.com/{REPOSITORY}/releases/download/{urllib.parse.quote(tag)}/{ASSET_NAME}",
+            }
+        ],
+    }
 
 
 def _download(url: str, destination: Path, expected_size: int | None, expected_digest: str | None) -> None:
@@ -187,7 +217,7 @@ def schedule_update_if_available() -> bool:
     workspace = Path(tempfile.mkdtemp(prefix="deepcoin-update-"))
     scheduled = False
     try:
-        release = _request_json(RELEASES_URL)
+        release = _latest_release()
         tag = str(release.get("tag_name", ""))
         if not tag or _version(tag) <= _version(current_version()):
             return False
