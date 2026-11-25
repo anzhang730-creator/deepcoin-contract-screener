@@ -3,7 +3,8 @@ $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $releaseRoot = Join-Path $projectRoot "release"
 $distRoot = Join-Path $projectRoot "dist"
 $exeName = "DeepcoinScreen"
-$releaseVersion = if ($env:DEEPCOIN_VERSION) { $env:DEEPCOIN_VERSION } else { "1.0.0" }
+if (-not $env:DEEPCOIN_VERSION) { throw "Set DEEPCOIN_VERSION explicitly before building a release." }
+$releaseVersion = $env:DEEPCOIN_VERSION
 $releaseVersion = $releaseVersion.Trim()
 if ($releaseVersion -notmatch '^v?\d+(\.\d+){0,2}$') { throw "DEEPCOIN_VERSION must look like 1.0.0 or v1.0.0" }
 
@@ -28,5 +29,8 @@ if (-not (Test-Path (Join-Path $releaseRoot "version.txt"))) { throw "version.tx
 $zipPath = Join-Path $projectRoot "DeepcoinScreen-Windows.zip"
 if (Test-Path $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
 Compress-Archive -Path (Join-Path $releaseRoot "*") -DestinationPath $zipPath -CompressionLevel Optimal
+$archiveHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+Set-Content -LiteralPath (Join-Path $projectRoot "SHA256SUMS.txt") -Value ("$archiveHash *DeepcoinScreen-Windows.zip") -Encoding ascii
 Write-Host "Release directory: $releaseRoot"
 Write-Host "ZIP package: $zipPath"
+Write-Host "Checksum manifest: $(Join-Path $projectRoot 'SHA256SUMS.txt')"

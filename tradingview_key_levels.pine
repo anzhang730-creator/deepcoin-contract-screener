@@ -1,0 +1,400 @@
+//@version=6
+indicator("关键位支撑压力区", shorttitle="Key Levels SR", overlay=true, max_boxes_count=80, max_labels_count=50, max_bars_back=5000)
+
+// 结构拐点会等待右侧 K 线确认，因此区域不会使用未确认的未来数据。
+
+string GROUP_STRUCTURE = "1. 结构识别"
+int pivotLeft = input.int(6, "拐点左侧 K 数", minval=2, maxval=30, group=GROUP_STRUCTURE)
+int pivotRight = input.int(6, "拐点右侧 K 数", minval=2, maxval=30, group=GROUP_STRUCTURE)
+int atrLength = input.int(14, "ATR 周期", minval=5, maxval=100, group=GROUP_STRUCTURE)
+float minSwingAtr = input.float(1.0, "最小摆动幅度（ATR）", minval=0.25, maxval=5.0, step=0.05, group=GROUP_STRUCTURE,
+     tooltip="拐点窗口的高低落差至少达到该 ATR 倍数，数值越大，区域越少。")
+
+string GROUP_ZONE = "2. 支撑压力区域"
+float zoneAtrMult = input.float(0.30, "区域宽度（ATR）", minval=0.05, maxval=1.5, step=0.05, group=GROUP_ZONE)
+float maxZonePct = input.float(0.70, "区域最大宽度（价格 %）", minval=0.1, maxval=5.0, step=0.05, group=GROUP_ZONE)
+float mergeAtrMult = input.float(0.45, "合并距离（ATR）", minval=0.05, maxval=2.0, step=0.05, group=GROUP_ZONE)
+int maxZonesPerKind = input.int(5, "每侧最多保留区域", minval=1, maxval=10, group=GROUP_ZONE)
+int maxZoneAge = input.int(1500, "区域最长保留 K 数", minval=100, maxval=10000, group=GROUP_ZONE)
+
+string GROUP_SCORE = "3. 反应评分"
+float reactionAtr = input.float(0.75, "有效反应距离（ATR）", minval=0.2, maxval=3.0, step=0.05, group=GROUP_SCORE)
+int reactionBars = input.int(12, "反应确认窗口（K 数）", minval=2, maxval=50, group=GROUP_SCORE)
+int touchCooldown = input.int(8, "两次触碰最小间隔", minval=1, maxval=100, group=GROUP_SCORE)
+float minCreateScore = input.float(55.0, "最低建区评分", minval=40.0, maxval=90.0, step=1.0, group=GROUP_SCORE)
+
+string GROUP_BREAK = "4. 突破确认"
+float breakBufferAtr = input.float(0.15, "突破缓冲（ATR）", minval=0.0, maxval=1.0, step=0.05, group=GROUP_BREAK)
+int breakClosesNeed = input.int(2, "连续收盘确认数", minval=1, maxval=5, group=GROUP_BREAK)
+bool enableRoleFlip = input.bool(true, "突破后支撑/压力互换", group=GROUP_BREAK)
+
+string GROUP_HTF = "5. 高周期共振"
+bool useHtf = input.bool(true, "启用高周期拐点", group=GROUP_HTF)
+string htf = input.timeframe("240", "高周期", group=GROUP_HTF)
+int htfPivotLeft = input.int(5, "高周期左侧 K 数", minval=2, maxval=20, group=GROUP_HTF)
+int htfPivotRight = input.int(5, "高周期右侧 K 数", minval=2, maxval=20, group=GROUP_HTF)
+
+string GROUP_LEVELS = "6. 固定关键位"
+bool showPrevDay = input.bool(true, "前一交易日高低点", group=GROUP_LEVELS)
+bool showPrevWeek = input.bool(true, "前一周高低点", group=GROUP_LEVELS)
+bool showDayOpen = input.bool(true, "当日开盘价", group=GROUP_LEVELS)
+bool showVwap = input.bool(true, "VWAP", group=GROUP_LEVELS)
+
+string GROUP_VIEW = "7. 显示"
+bool showZones = input.bool(true, "显示动态区域", group=GROUP_VIEW)
+bool showZoneText = input.bool(true, "显示评分和触碰次数", group=GROUP_VIEW)
+bool showEventMarks = input.bool(true, "显示触碰/突破标记", group=GROUP_VIEW)
+bool showPanel = input.bool(true, "显示最近区域面板", group=GROUP_VIEW)
+color supportColor = input.color(color.rgb(22, 163, 74), "支撑区颜色", group=GROUP_VIEW)
+color resistanceColor = input.color(color.rgb(220, 38, 38), "压力区颜色", group=GROUP_VIEW)
+color previousDayColor = input.color(color.rgb(245, 158, 11), "前一日颜色", group=GROUP_VIEW)
+color previousWeekColor = input.color(color.rgb(168, 85, 247), "前一周颜色", group=GROUP_VIEW)
+
+type Zone
+    float top
+    float bottom
+    int kind                 // 1 = 支撑，-1 = 压力
+    float score
+    int touches
+    int bornBar
+    int lastTouchBar
+    int pendingTouchBar
+    int outsideCloses
+    bool pendingReaction
+    bool awaitingRetest
+    bool containsHtf
+    box visual
+
+var array<Zone> zones = array.new<Zone>()
+float atr = ta.atr(atrLength)
+
+f_clamp(float value, float lowValue, float highValue) =>
+    math.max(lowValue, math.min(highValue, value))
+
+f_center(Zone zone) =>
+    (zone.top + zone.bottom) * 0.5
+
+f_rank(Zone zone) =>
+    float distanceAtr = na(atr) or atr <= 0.0 ? 0.0 : math.abs(f_center(zone) - close) / atr
+    zone.score - math.min(24.0, distanceAtr * 1.8) - math.min(12.0, (bar_index - zone.bornBar) / 250.0)
+
+f_refresh(Zone zone) =>
+    color baseColor = zone.kind == 1 ? supportColor : resistanceColor
+    int transparency = int(math.round(f_clamp(88.0 - (zone.score - 50.0) * 1.15, 58.0, 90.0)))
+    color fillColor = showZones ? (zone.awaitingRetest ? color.new(color.orange, 82) : color.new(baseColor, transparency)) : color.new(baseColor, 100)
+    color edgeColor = zone.awaitingRetest ? color.new(color.orange, 15) : color.new(baseColor, zone.score >= 75.0 ? 5 : 30)
+    string sideText = zone.kind == 1 ? "支撑" : "压力"
+    string textValue = showZoneText ? sideText + " " + str.tostring(math.round(zone.score)) + "分 · T" + str.tostring(zone.touches) + (zone.containsHtf ? " · HTF" : "") + (zone.awaitingRetest ? " · 待回踩" : "") : ""
+    box.set_top(zone.visual, zone.top)
+    box.set_bottom(zone.visual, zone.bottom)
+    box.set_right(zone.visual, bar_index)
+    box.set_bgcolor(zone.visual, fillColor)
+    box.set_border_color(zone.visual, showZones ? edgeColor : color.new(edgeColor, 100))
+    box.set_border_width(zone.visual, zone.score >= 75.0 ? 2 : 1)
+    box.set_text(zone.visual, textValue)
+    box.set_text_color(zone.visual, color.new(baseColor, 0))
+    box.set_text_size(zone.visual, size.tiny)
+    box.set_text_halign(zone.visual, text.align_right)
+    0
+
+f_delete(int index) =>
+    Zone zone = array.get(zones, index)
+    box.delete(zone.visual)
+    array.remove(zones, index)
+    0
+
+f_countKind(int kind) =>
+    int result = 0
+    if array.size(zones) > 0
+        for index = 0 to array.size(zones) - 1
+            Zone zone = array.get(zones, index)
+            if zone.kind == kind
+                result += 1
+    result
+
+f_pruneKind(int kind) =>
+    int overflow = math.max(0, f_countKind(kind) - maxZonesPerKind)
+    if overflow > 0
+        for removal = 0 to overflow - 1
+            int weakestIndex = -1
+            float weakestRank = 1000000000.0
+            if array.size(zones) > 0
+                for index = 0 to array.size(zones) - 1
+                    Zone zone = array.get(zones, index)
+                    if zone.kind == kind
+                        float rank = f_rank(zone)
+                        if rank < weakestRank
+                            weakestRank := rank
+                            weakestIndex := index
+            if weakestIndex >= 0
+                f_delete(weakestIndex)
+    0
+
+f_addCandidate(float center, int kind, float sourceAtr, float swingStrength, bool fromHtf, int sourceBar) =>
+    if not na(center) and not na(sourceAtr) and sourceAtr > 0.0 and not na(swingStrength) and swingStrength >= minSwingAtr
+        float rawWidth = sourceAtr * zoneAtrMult
+        float widthCap = math.max(syminfo.mintick * 5.0, math.abs(center) * maxZonePct * 0.01)
+        float width = math.max(syminfo.mintick * 5.0, math.min(rawWidth, widthCap))
+        float candidateTop = kind == 1 ? center + width * 0.65 : center + width * 0.35
+        float candidateBottom = kind == 1 ? center - width * 0.35 : center - width * 0.65
+        float strengthBonus = math.min(17.0, math.max(0.0, swingStrength - minSwingAtr) * 10.0)
+        float candidateScore = f_clamp(58.0 + strengthBonus + (fromHtf ? 12.0 : 0.0), 0.0, 100.0)
+        int mergeIndex = -1
+        float closestDistance = 1000000000.0
+        if array.size(zones) > 0
+            for index = 0 to array.size(zones) - 1
+                Zone zone = array.get(zones, index)
+                float distance = math.abs(f_center(zone) - center)
+                bool overlaps = candidateBottom <= zone.top and candidateTop >= zone.bottom
+                bool closeEnough = distance <= sourceAtr * mergeAtrMult
+                if zone.kind == kind and (overlaps or closeEnough) and distance < closestDistance
+                    closestDistance := distance
+                    mergeIndex := index
+        if mergeIndex >= 0
+            Zone merged = array.get(zones, mergeIndex)
+            float oldCenter = f_center(merged)
+            float oldWidth = merged.top - merged.bottom
+            float mergedCenter = (oldCenter * math.max(1.0, merged.score) + center * candidateScore) / (math.max(1.0, merged.score) + candidateScore)
+            float unionWidth = math.max(merged.top, candidateTop) - math.min(merged.bottom, candidateBottom)
+            float mergedWidth = math.min(unionWidth, math.max(oldWidth, width) * 1.35)
+            merged.top := mergedCenter + mergedWidth * 0.5
+            merged.bottom := mergedCenter - mergedWidth * 0.5
+            merged.score := f_clamp(math.max(merged.score, candidateScore) + 6.0 + (fromHtf and not merged.containsHtf ? 5.0 : 0.0), 0.0, 100.0)
+            merged.containsHtf := merged.containsHtf or fromHtf
+            merged.bornBar := math.min(merged.bornBar, sourceBar)
+            f_refresh(merged)
+        else if candidateScore >= minCreateScore
+            color baseColor = kind == 1 ? supportColor : resistanceColor
+            box visual = box.new(left=sourceBar, top=candidateTop, right=bar_index, bottom=candidateBottom,
+                 xloc=xloc.bar_index, extend=extend.right, bgcolor=color.new(baseColor, 84), border_color=color.new(baseColor, 25))
+            Zone created = Zone.new(candidateTop, candidateBottom, kind, candidateScore, 0, sourceBar, -100000, -100000, 0, false, false, fromHtf, visual)
+            array.push(zones, created)
+            f_refresh(created)
+            f_pruneKind(kind)
+    0
+
+// ───────────────────────────── 当前周期拐点 ─────────────────────────────
+float pivotHigh = ta.pivothigh(high, pivotLeft, pivotRight)
+float pivotLow = ta.pivotlow(low, pivotLeft, pivotRight)
+int pivotWindow = pivotLeft + pivotRight + 1
+float pivotAtr = atr[pivotRight]
+float highSwing = not na(pivotHigh) and not na(pivotAtr) and pivotAtr > 0.0 ? (pivotHigh - ta.lowest(low, pivotWindow)) / pivotAtr : na
+float lowSwing = not na(pivotLow) and not na(pivotAtr) and pivotAtr > 0.0 ? (ta.highest(high, pivotWindow) - pivotLow) / pivotAtr : na
+
+if barstate.isconfirmed and not na(pivotHigh)
+    f_addCandidate(pivotHigh, -1, pivotAtr, highSwing, false, bar_index - pivotRight)
+if barstate.isconfirmed and not na(pivotLow)
+    f_addCandidate(pivotLow, 1, pivotAtr, lowSwing, false, bar_index - pivotRight)
+
+// ───────────────────────────── 高周期拐点 ─────────────────────────────
+f_htfHigh(int leftBars, int rightBars, int atrLen) =>
+    float point = ta.pivothigh(high, leftBars, rightBars)
+    float pointAtr = ta.atr(atrLen)[rightBars]
+    float strength = not na(point) and not na(pointAtr) and pointAtr > 0.0 ? (point - ta.lowest(low, leftBars + rightBars + 1)) / pointAtr : na
+    [point, pointAtr, strength]
+
+f_htfLow(int leftBars, int rightBars, int atrLen) =>
+    float point = ta.pivotlow(low, leftBars, rightBars)
+    float pointAtr = ta.atr(atrLen)[rightBars]
+    float strength = not na(point) and not na(pointAtr) and pointAtr > 0.0 ? (ta.highest(high, leftBars + rightBars + 1) - point) / pointAtr : na
+    [point, pointAtr, strength]
+
+[htfHigh, htfHighAtr, htfHighStrength] = request.security(syminfo.tickerid, htf, f_htfHigh(htfPivotLeft, htfPivotRight, atrLength), gaps=barmerge.gaps_on, lookahead=barmerge.lookahead_off)
+[htfLow, htfLowAtr, htfLowStrength] = request.security(syminfo.tickerid, htf, f_htfLow(htfPivotLeft, htfPivotRight, atrLength), gaps=barmerge.gaps_on, lookahead=barmerge.lookahead_off)
+bool newHtfHigh = useHtf and not na(htfHigh) and na(htfHigh[1])
+bool newHtfLow = useHtf and not na(htfLow) and na(htfLow[1])
+
+if barstate.isconfirmed and newHtfHigh
+    f_addCandidate(htfHigh, -1, htfHighAtr, htfHighStrength, true, bar_index)
+if barstate.isconfirmed and newHtfLow
+    f_addCandidate(htfLow, 1, htfLowAtr, htfLowStrength, true, bar_index)
+
+// ───────────────────────────── 区域维护、触碰和突破 ─────────────────────────────
+bool supportTouchEvent = false
+bool resistanceTouchEvent = false
+bool supportBrokenEvent = false
+bool resistanceBrokenEvent = false
+bool retestConfirmedEvent = false
+int retestDirectionEvent = 0
+int zoneIndex = 0
+
+while zoneIndex < array.size(zones)
+    Zone zone = array.get(zones, zoneIndex)
+    if bar_index - zone.bornBar > maxZoneAge
+        f_delete(zoneIndex)
+    else
+        float breakoutBuffer = nz(atr, 0.0) * breakBufferAtr
+        bool outside = zone.kind == 1 ? close < zone.bottom - breakoutBuffer : close > zone.top + breakoutBuffer
+        if barstate.isconfirmed
+            zone.outsideCloses := outside ? zone.outsideCloses + 1 : 0
+        bool confirmedBreak = barstate.isconfirmed and zone.outsideCloses >= breakClosesNeed
+        bool removedByBreak = false
+        if confirmedBreak
+            if zone.kind == 1
+                supportBrokenEvent := true
+            else
+                resistanceBrokenEvent := true
+            if enableRoleFlip
+                zone.kind := -zone.kind
+                zone.score := f_clamp(zone.score - 12.0, minCreateScore, 100.0)
+                zone.touches := 0
+                zone.bornBar := bar_index
+                zone.lastTouchBar := bar_index
+                zone.pendingTouchBar := -100000
+                zone.pendingReaction := false
+                zone.outsideCloses := 0
+                zone.awaitingRetest := true
+            else
+                f_delete(zoneIndex)
+                removedByBreak := true
+        if not removedByBreak and zoneIndex < array.size(zones)
+            Zone current = array.get(zones, zoneIndex)
+            bool inZone = low <= current.top and high >= current.bottom
+            bool touchAllowed = barstate.isconfirmed and bar_index > current.bornBar + 1 and bar_index - current.lastTouchBar >= touchCooldown
+            if inZone and touchAllowed
+                current.touches += 1
+                current.lastTouchBar := bar_index
+                current.pendingTouchBar := bar_index
+                current.pendingReaction := true
+                if current.touches >= 4
+                    current.score := f_clamp(current.score - (current.touches == 4 ? 3.0 : 6.0), 0.0, 100.0)
+                if current.kind == 1
+                    supportTouchEvent := true
+                else
+                    resistanceTouchEvent := true
+            if barstate.isconfirmed and current.pendingReaction
+                int elapsed = bar_index - current.pendingTouchBar
+                bool reacted = current.kind == 1 ? close >= current.top + nz(atr, 0.0) * reactionAtr : close <= current.bottom - nz(atr, 0.0) * reactionAtr
+                if reacted and elapsed <= reactionBars
+                    float reactionBonus = current.touches == 1 ? 10.0 : current.touches == 2 ? 12.0 : current.touches == 3 ? 7.0 : current.touches == 4 ? 2.0 : -2.0
+                    if current.awaitingRetest
+                        reactionBonus += 8.0
+                        current.awaitingRetest := false
+                        retestConfirmedEvent := true
+                        retestDirectionEvent := current.kind
+                    current.score := f_clamp(current.score + reactionBonus, 0.0, 100.0)
+                    current.pendingReaction := false
+                else if elapsed > reactionBars
+                    current.score := f_clamp(current.score - 5.0, 0.0, 100.0)
+                    current.pendingReaction := false
+            f_refresh(current)
+            zoneIndex += 1
+
+f_pruneKind(1)
+f_pruneKind(-1)
+
+// 当前价格上下方各取最近的有效区域，既用于面板，也作为数据出口。
+int nearestSupportIndex = -1
+int nearestResistanceIndex = -1
+float nearestSupportDistance = 1000000000.0
+float nearestResistanceDistance = 1000000000.0
+float sideTolerance = nz(atr, 0.0) * breakBufferAtr
+
+if array.size(zones) > 0
+    for index = 0 to array.size(zones) - 1
+        Zone zone = array.get(zones, index)
+        float distance = close > zone.top ? close - zone.top : close < zone.bottom ? zone.bottom - close : 0.0
+        bool supportEligible = zone.kind == 1 and zone.bottom <= close + sideTolerance
+        bool resistanceEligible = zone.kind == -1 and zone.top >= close - sideTolerance
+        if supportEligible and distance < nearestSupportDistance
+            nearestSupportDistance := distance
+            nearestSupportIndex := index
+        if resistanceEligible and distance < nearestResistanceDistance
+            nearestResistanceDistance := distance
+            nearestResistanceIndex := index
+
+// 协议 61001：评分 + 触碰次数 * 1000 + 标志 * 100000。
+// 标志位：1 = 含高周期依据，2 = 突破后待回踩，3 = 两者同时存在。
+float dataSupportTop = na
+float dataSupportBottom = na
+float dataSupportScore = na
+int dataSupportTouches = 0
+int dataSupportFlags = 0
+if nearestSupportIndex >= 0
+    Zone supportData = array.get(zones, nearestSupportIndex)
+    dataSupportTop := supportData.top
+    dataSupportBottom := supportData.bottom
+    dataSupportScore := supportData.score
+    dataSupportTouches := supportData.touches
+    dataSupportFlags := (supportData.containsHtf ? 1 : 0) + (supportData.awaitingRetest ? 2 : 0)
+
+float dataResistanceTop = na
+float dataResistanceBottom = na
+float dataResistanceScore = na
+int dataResistanceTouches = 0
+int dataResistanceFlags = 0
+if nearestResistanceIndex >= 0
+    Zone resistanceData = array.get(zones, nearestResistanceIndex)
+    dataResistanceTop := resistanceData.top
+    dataResistanceBottom := resistanceData.bottom
+    dataResistanceScore := resistanceData.score
+    dataResistanceTouches := resistanceData.touches
+    dataResistanceFlags := (resistanceData.containsHtf ? 1 : 0) + (resistanceData.awaitingRetest ? 2 : 0)
+
+float dataSupportMeta = na(dataSupportScore) ? na : dataSupportScore + dataSupportTouches * 1000.0 + dataSupportFlags * 100000.0
+float dataResistanceMeta = na(dataResistanceScore) ? na : dataResistanceScore + dataResistanceTouches * 1000.0 + dataResistanceFlags * 100000.0
+int dataEventCode = retestConfirmedEvent ? retestDirectionEvent * 30 : resistanceBrokenEvent ? 21 : supportBrokenEvent ? -21 : supportTouchEvent ? 11 : resistanceTouchEvent ? -11 : 0
+
+plot(61001.0, "数据出口·协议61001", display=display.none)
+plot(dataSupportTop, "数据出口·支撑上沿", display=display.none)
+plot(dataSupportBottom, "数据出口·支撑下沿", display=display.none)
+plot(dataSupportMeta, "数据出口·支撑元数据", display=display.none)
+plot(dataResistanceTop, "数据出口·压力上沿", display=display.none)
+plot(dataResistanceBottom, "数据出口·压力下沿", display=display.none)
+plot(dataResistanceMeta, "数据出口·压力元数据", display=display.none)
+plot(dataEventCode, "数据出口·事件代码", display=display.none)
+
+// ───────────────────────────── 固定关键位 ─────────────────────────────
+float previousDayHigh = request.security(syminfo.tickerid, "D", high[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+float previousDayLow = request.security(syminfo.tickerid, "D", low[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+float previousWeekHigh = request.security(syminfo.tickerid, "W", high[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+float previousWeekLow = request.security(syminfo.tickerid, "W", low[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+float dayOpen = request.security(syminfo.tickerid, "D", open, gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+float sessionVwap = ta.vwap(hlc3)
+
+plot(showPrevDay ? previousDayHigh : na, "前一日高点", color=color.new(previousDayColor, 0), linewidth=1, style=plot.style_linebr)
+plot(showPrevDay ? previousDayLow : na, "前一日低点", color=color.new(previousDayColor, 0), linewidth=1, style=plot.style_linebr)
+plot(showPrevWeek ? previousWeekHigh : na, "前一周高点", color=color.new(previousWeekColor, 0), linewidth=2, style=plot.style_linebr)
+plot(showPrevWeek ? previousWeekLow : na, "前一周低点", color=color.new(previousWeekColor, 0), linewidth=2, style=plot.style_linebr)
+plot(showDayOpen ? dayOpen : na, "当日开盘", color=color.new(color.blue, 15), linewidth=1, style=plot.style_linebr)
+plot(showVwap ? sessionVwap : na, "VWAP", color=color.new(color.aqua, 0), linewidth=2)
+
+plotshape(showEventMarks and supportTouchEvent, title="触碰支撑", style=shape.circle, location=location.belowbar, color=supportColor, size=size.tiny, text="S")
+plotshape(showEventMarks and resistanceTouchEvent, title="触碰压力", style=shape.circle, location=location.abovebar, color=resistanceColor, size=size.tiny, text="R")
+plotshape(showEventMarks and resistanceBrokenEvent, title="突破压力", style=shape.triangleup, location=location.belowbar, color=color.lime, size=size.tiny, text="突破")
+plotshape(showEventMarks and supportBrokenEvent, title="跌破支撑", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.tiny, text="跌破")
+plotshape(showEventMarks and retestConfirmedEvent, title="角色互换回踩确认", style=shape.diamond, location=location.belowbar, color=color.orange, size=size.tiny, text="回踩")
+
+// ───────────────────────────── 最近区域面板 ─────────────────────────────
+var table panel = table.new(position.top_right, 3, 3, bgcolor=color.new(color.rgb(15, 23, 42), 8), frame_color=color.new(color.silver, 65), frame_width=1)
+if barstate.islast
+    if showPanel
+        table.cell(panel, 0, 0, "最近区域", text_color=color.white, text_size=size.small)
+        table.cell(panel, 1, 0, "价格范围", text_color=color.white, text_size=size.small)
+        table.cell(panel, 2, 0, "质量", text_color=color.white, text_size=size.small)
+        if nearestResistanceIndex >= 0
+            Zone resistance = array.get(zones, nearestResistanceIndex)
+            table.cell(panel, 0, 1, resistance.awaitingRetest ? "压力候选" : "压力", text_color=resistanceColor)
+            table.cell(panel, 1, 1, str.tostring(resistance.bottom, format.mintick) + " – " + str.tostring(resistance.top, format.mintick), text_color=color.white)
+            table.cell(panel, 2, 1, str.tostring(math.round(resistance.score)), text_color=resistance.score >= 75.0 ? color.lime : color.white)
+        else
+            table.cell(panel, 0, 1, "压力", text_color=resistanceColor)
+            table.cell(panel, 1, 1, "—", text_color=color.gray)
+            table.cell(panel, 2, 1, "—", text_color=color.gray)
+        if nearestSupportIndex >= 0
+            Zone support = array.get(zones, nearestSupportIndex)
+            table.cell(panel, 0, 2, support.awaitingRetest ? "支撑候选" : "支撑", text_color=supportColor)
+            table.cell(panel, 1, 2, str.tostring(support.bottom, format.mintick) + " – " + str.tostring(support.top, format.mintick), text_color=color.white)
+            table.cell(panel, 2, 2, str.tostring(math.round(support.score)), text_color=support.score >= 75.0 ? color.lime : color.white)
+        else
+            table.cell(panel, 0, 2, "支撑", text_color=supportColor)
+            table.cell(panel, 1, 2, "—", text_color=color.gray)
+            table.cell(panel, 2, 2, "—", text_color=color.gray)
+    else
+        table.clear(panel, 0, 0, 2, 2)
+
+alertcondition(supportTouchEvent, "价格触碰支撑区", "{{ticker}} {{interval}}：价格触碰支撑区")
+alertcondition(resistanceTouchEvent, "价格触碰压力区", "{{ticker}} {{interval}}：价格触碰压力区")
+alertcondition(resistanceBrokenEvent, "压力区被突破", "{{ticker}} {{interval}}：压力区已通过连续收盘确认突破")
+alertcondition(supportBrokenEvent, "支撑区被跌破", "{{ticker}} {{interval}}：支撑区已通过连续收盘确认跌破")
+alertcondition(retestConfirmedEvent, "角色互换回踩确认", "{{ticker}} {{interval}}：突破后的角色互换区域已完成回踩确认")

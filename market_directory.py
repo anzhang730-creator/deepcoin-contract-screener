@@ -47,17 +47,27 @@ class MarketDirectory:
 
     def get_markets(self, force: bool = False) -> list[dict[str, Any]]:
         request_started = time.monotonic()
-        with self._lock:
-            if not force and self._health["status"] != "error" and self._markets is not None and request_started - self._checked < self.refresh_seconds:
-                return deepcopy(self._markets)
-        with self._refresh_lock:
+        if not force:
+            with self._lock:
+                if self._health["status"] == "ready" and self._markets is not None and request_started - self._checked < self.refresh_seconds:
+                    return deepcopy(self._markets)
+                if self._health["status"] == "error":
+                    if self._markets is not None:
+                        return deepcopy(self._markets)
+                    detail = "; ".join(self._health.get("errors") or [])
+                    raise MarketDirectoryError(f"官网合约清单核验失败：{detail}。后台会自动重试，筛选仅使用已确认合约。")
+                if self._health["refreshing"] or self._health["status"] == "starting":
+                    if self._markets is not None:
+                        return deepcopy(self._markets)
+                    raise MarketDirectoryError("官网合约清单正在核验，请稍后重试；核验完成后会自动恢复筛选。")
+                raise MarketDirectoryError("官网合约清单已过期，正在等待后台核验；核验完成后会自动恢复筛选。")
+        self._refresh_lock.acquire()
+        try:
             # Concurrent requests share the same completed refresh.
             with self._lock:
                 now = time.monotonic()
-                if self._health["status"] != "error" and self._markets is not None and now - self._checked < self.refresh_seconds and (not force or self._checked >= request_started):
+                if self._health["status"] == "ready" and self._markets is not None and now - self._checked < self.refresh_seconds and self._checked >= request_started:
                     return deepcopy(self._markets)
-                if not force and self._health["status"] == "error" and now - self._attempted < self.retry_seconds:
-                    raise MarketDirectoryError("官网合约清单核验失败，正在自动重试；没有把未确认合约加入可交易结果。")
                 self._attempted = now
                 self._health.update(refreshing=True, attemptAt=int(time.time() * 1000))
             try:
@@ -78,6 +88,8 @@ class MarketDirectory:
                 self._checked = time.monotonic()
                 self._health.update(audit, status="ready", checkedAt=checked_at, refreshing=False, errors=[], changes=changes)
                 return deepcopy(markets)
+        finally:
+            self._refresh_lock.release()
 
     def _reconcile(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         raw = self.instruments()
@@ -127,7 +139,7 @@ class MarketDirectory:
                 markets.append({
                     "id": inst_id, "symbol": symbol, "base": item.get("baseCcy"), "quote": quote,
                     "productGroup": group, "assetType": str(item.get("assetType") or "").lower(),
-                    "active": True, "maxLeverage": item.get("lever"), "webSymbol": web_symbol,
+                    "active": True, "maxLeverage": item.get("lever"), "tickSize": item.get("tickSz"), "webSymbol": web_symbol,
                     "webCatalogStatus": "available", "webListed": True,
                     "tradeUrl": "https://www.deepcoin.com/swap/zh/" + urlquote(web_symbol, safe=""),
                     "webTradeStatus": "available", "webTradeReason": "",

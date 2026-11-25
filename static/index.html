@@ -4,17 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Deepcoin 合约筛选器</title>
+  <script>if (location.pathname === "/chart") document.documentElement.classList.add("chart-page"); if (location.pathname === "/carousel") document.documentElement.classList.add("carousel-page");</script>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <main class="shell">
+  <main id="appShell" class="shell">
     <header class="topbar">
       <div>
         <div class="eyebrow">DEEPCOIN · PERPETUALS</div>
         <h1>合约交易对筛选器</h1>
         <p class="subtitle">手动组合指标条件，扫描 Deepcoin 线性永续合约</p>
       </div>
-      <div class="live-status"><span class="status-dot"></span><span id="healthText">连接检查中</span></div>
+      <div class="topbar-actions"><div class="live-status"><span class="status-dot"></span><span id="healthText">连接检查中</span></div><div class="update-controls"><button type="button" class="text-button" id="updateCheckButton">检查更新</button><span id="updateStatus" role="status"></span></div></div>
     </header>
 
     <section class="market-audit" aria-label="官网合约自检">
@@ -38,8 +39,8 @@
       <div class="conditions-heading"><div><span class="section-kicker">条件组合</span><h2>所有条件同时满足 · 每条条件可使用不同周期</h2></div><button class="text-button" id="clearConditions" type="button">清空条件</button></div>
       <div id="conditions" class="conditions"></div>
       <button class="add-condition" id="addCondition" type="button"><span>+</span> 添加筛选条件</button>
-      <div class="quick-presets"><span>常用条件</span><button type="button" data-preset="trend">EMA20 &gt; EMA60</button><button type="button" data-preset="price-ma">收盘价 &gt; EMA20</button><button type="button" data-preset="rsi">RSI14 &gt; 50</button><button type="button" data-preset="band">收盘价 &lt; 布林下轨</button></div>
-      <div class="actions"><button class="primary-button" id="screenButton" type="button"><span class="button-icon">⌕</span>开始筛选</button><label class="refresh-toggle"><input id="autoRefresh" type="checkbox" checked><span>每 10 秒刷新实时价格</span></label><span id="runHint">收盘结果使用已收盘 K 线，实时结果使用最新价重算指标</span></div>
+      <div class="quick-presets"><span>常用条件</span><button type="button" data-preset="trend">EMA20 &gt; EMA60</button><button type="button" data-preset="price-ma">收盘价 &gt; EMA20</button><button type="button" data-preset="price-near-ema">价格接近 EMA20</button><button type="button" data-preset="rsi">RSI14 &gt; 50</button><button type="button" data-preset="band">收盘价 &lt; 布林下轨</button><button type="button" data-preset="key-support">高质量支撑</button><button type="button" data-preset="key-hammer">支撑锤型拒绝</button><button type="button" data-preset="key-inverted-hammer">压力长上影拒绝</button><button type="button" data-preset="key-touch">收盘触碰支撑</button><button type="button" data-preset="key-break">压力突破确认</button></div>
+      <div class="actions"><button class="primary-button" id="screenButton" type="button" aria-live="polite"><span class="button-icon">⌕</span>开始筛选</button><label class="refresh-toggle"><input id="autoRefresh" type="checkbox"><span>每 60 秒自动重新筛选</span></label><span id="runHint">收盘结果使用已收盘 K 线，实时结果使用最新价重算指标；扫描期间不会重复排队</span></div>
       </div>
     </section>
 
@@ -47,7 +48,7 @@
       <button class="collapse-header" type="button" aria-expanded="false" aria-controls="rankingBodyPanel"><span><span class="section-kicker">涨跌幅模块</span><strong>周期涨跌幅排序</strong></span><span class="collapse-state">展开 <span class="collapse-chevron">⌄</span></span></button>
       <div class="panel-body hidden" id="rankingBodyPanel">
       <div class="panel-heading"><div><span class="section-kicker">涨跌幅排序</span><h2>按指定周期价格变化排序</h2></div><span class="source-label">当前价相对周期前一根已收盘 K 线</span></div>
-      <div class="ranking-controls"><label>排序周期<select id="rankingTimeframe"><option value="1m">1 分钟</option><option value="5m">5 分钟</option><option value="15m">15 分钟</option><option value="30m">30 分钟</option><option value="1h" selected>1 小时</option><option value="4h">4 小时</option><option value="12h">12 小时</option><option value="1d">1 日</option><option value="1w">1 周</option></select></label><label>方向<select id="rankingDirection"><option value="desc">涨幅从高到低</option><option value="asc">跌幅从高到低</option></select></label><button class="secondary-button" id="rankButton" type="button">更新排序</button><span id="rankMeta">尚未运行</span></div>
+      <div class="ranking-controls"><label>排序周期<select id="rankingTimeframe"><option value="1m">1 分钟</option><option value="5m">5 分钟</option><option value="15m">15 分钟</option><option value="30m">30 分钟</option><option value="1h" selected>1 小时</option><option value="4h">4 小时</option><option value="12h">12 小时</option><option value="1d">1 日</option><option value="1w">1 周</option></select></label><label>方向<select id="rankingDirection"><option value="desc">涨幅从高到低</option><option value="asc">跌幅从高到低</option></select></label><label>自动重排<select id="rankingRefreshSeconds"><option value="0">关闭</option><option value="30">每 30 秒</option><option value="60" selected>每 60 秒</option><option value="120">每 2 分钟</option><option value="300">每 5 分钟</option></select></label><button class="secondary-button" id="rankButton" type="button">更新排序</button><button class="secondary-button" id="rankCarouselButton" type="button" disabled>轮播当前排序</button><span id="rankAutoStatus" role="status">更新排序后按 60 秒自动重排</span><span id="rankMeta">尚未运行</span></div>
       <div class="table-wrap"><table><thead><tr><th>排名</th><th>交易对</th><th>当前价</th><th>周期起点价</th><th>当前涨跌幅</th><th>收盘涨跌幅</th><th>24h 成交额</th></tr></thead><tbody id="rankingBody"><tr class="empty-row"><td colspan="7"><div class="empty-state"><div class="empty-mark">↕</div><strong>选择周期后更新排序</strong><span>涨跌幅基于该周期前一根已收盘 K 线计算</span></div></td></tr></tbody></table></div>
       </div>
     </section>
@@ -57,12 +58,93 @@
       <div class="panel-body" id="resultsBodyPanel">
       <div class="results-heading"><div><span class="section-kicker">筛选结果</span><h2><span id="resultCount">0</span> 个交易对符合条件</h2></div><div class="results-meta"><div class="result-tabs"><button class="result-tab active" data-mode="close" type="button">收盘 K 线</button><button class="result-tab" data-mode="live" type="button">实时价格</button></div><span id="scanMeta">尚未运行</span><button id="refreshButton" class="icon-button" title="重新筛选" type="button">↻</button></div></div>
       <div id="message" class="message hidden"></div>
-      <div class="table-wrap"><table><thead><tr><th>交易对</th><th id="priceHeader">收盘价</th><th>24h 涨跌</th><th>24h 成交额</th><th>EMA20</th><th>MA20</th><th>布林带</th><th>周期</th></tr></thead><tbody id="resultsBody"><tr class="empty-row"><td colspan="8"><div class="empty-state"><div class="empty-mark">⌁</div><strong>设置条件后开始筛选</strong><span>结果会显示在这里，指标值来自 Deepcoin 公开行情</span></div></td></tr></tbody></table></div>
+      <details id="screenDiagnostics" class="screen-diagnostics hidden">
+        <summary>扫描诊断</summary>
+        <p id="screenDiagnosticsSummary"></p>
+        <ul id="screenDiagnosticsConditions"></ul>
+      </details>
+        <div class="table-wrap"><table><thead><tr><th>交易对</th><th id="priceHeader">收盘价</th><th>24h 涨跌</th><th>24h 成交额</th><th>EMA20</th><th>MA20</th><th>布林带</th><th>关键位（支撑 / 压力）</th><th>周期</th></tr></thead><tbody id="resultsBody"><tr class="empty-row"><td colspan="9"><div class="empty-state"><div class="empty-mark">⌁</div><strong>设置条件后开始筛选</strong><span>结果会显示在这里，指标值来自 Deepcoin 公开行情</span></div></td></tr></tbody></table></div>
       </div>
+    </section>
+    <section class="carousel-settings" aria-label="自动轮播设置">
+      <div class="carousel-settings-heading"><div><span class="section-kicker">多屏图表</span><h2>结果自动轮播</h2></div><span id="carouselResultHint">先完成一次筛选</span></div>
+      <div class="carousel-controls">
+        <label>显示器<select id="carouselDisplay"><option value="0">正在读取显示器…</option></select></label>
+        <label>每张停留（秒）<input id="carouselInterval" type="number" min="5" max="3600" value="15"></label>
+        <label>图表模式<select id="carouselMode"><option value="close">收盘 K 线</option><option value="live">实时价格</option></select></label>
+        <label>轮播来源<select id="carouselSource"><option value="screen">筛选结果</option><option value="ranking">涨跌幅排序</option></select></label>
+        <button class="secondary-button" id="carouselStart" type="button">启动轮播</button>
+        <span id="carouselStatus" role="status"></span>
+      </div>
+      <p class="carousel-help">可轮播筛选结果或涨跌幅排序；从排序模块启动时沿用当前周期、方向和列表顺序。启动后会在所选显示器打开独立全屏窗口，关闭该窗口即可停止。</p>
     </section>
     <footer>筛选与排序仅使用行情交易状态及官网两份清单共同确认的合约；每 60 秒自动核验，故障或清单差异每 15 秒重试<br>点击交易对名称 ↗ 经本地入口校验后打开 Deepcoin 合约页面；公开清单无法确认个人账户的地区或交易权限</footer>
   </main>
-  <template id="conditionTemplate"><div class="condition-row"><span class="condition-index"></span><label class="condition-field">周期<select class="condition-timeframe" title="该条件使用的 K 线周期"><option value="1m">1分钟</option><option value="5m">5分钟</option><option value="15m">15分钟</option><option value="30m">30分钟</option><option value="1h" selected>1小时</option><option value="4h">4小时</option><option value="12h">12小时</option><option value="1d">1日</option><option value="1w">1周</option></select></label><label class="condition-field">左指标<select class="condition-indicator"><option value="price" selected>最新价</option><option value="change24h">24h 涨跌幅 (%)</option><option value="volume24h">24h 成交额</option><option value="ma">MA</option><option value="ema">EMA</option><option value="rsi">RSI</option><option value="bb_upper">布林上轨</option><option value="bb_middle">布林中轨</option><option value="bb_lower">布林下轨</option><option value="bb_width">布林带宽 (%)</option></select></label><label class="condition-field left-period-field hidden">左周期<input class="condition-period" type="number" min="1" max="200" value="20"></label><label class="condition-field">比较<select class="condition-operator"><option value=">" selected>大于</option><option value=">=">大于等于</option><option value="<">小于</option><option value="<=">小于等于</option><option value="=">等于</option><option value="!=">不等于</option></select></label><label class="condition-field">右侧类型<select class="condition-value-type"><option value="number" selected>数值</option><option value="indicator">指标</option></select></label><label class="condition-field numeric-value-field">数值<input class="condition-value" type="number" step="any" value="0" placeholder="例如 50"></label><label class="condition-field right-indicator-field hidden">右指标<select class="condition-value-indicator"><option value="price">最新价</option><option value="ma">MA</option><option value="ema">EMA</option><option value="rsi">RSI</option><option value="bb_upper">布林上轨</option><option value="bb_middle">布林中轨</option><option value="bb_lower">布林下轨</option></select></label><label class="condition-field right-period-field hidden">右周期<input class="condition-value-period" type="number" min="1" max="200" value="60"></label><button class="remove-condition" type="button" title="删除条件">×</button><div class="condition-summary"></div></div></template>
+  <dialog id="chartDialog" class="chart-dialog" aria-labelledby="chartTitle">
+    <section class="chart-window">
+      <header class="chart-header">
+        <div class="chart-instrument">
+          <span class="chart-live-dot" aria-hidden="true"></span>
+          <div><div class="chart-heading-line"><h2 id="chartTitle">交易对</h2><span id="chartSubtitle" class="chart-subtitle"></span></div><div id="chartQuote" class="chart-quote"></div></div>
+        </div>
+        <button id="chartClose" class="icon-button chart-close" type="button" title="关闭图表" aria-label="关闭图表">×</button>
+      </header>
+      <div class="chart-toolbar">
+        <label class="chart-timeframe-field">周期<select id="chartTimeframe"><option value="1m">1 分钟</option><option value="5m">5 分钟</option><option value="15m">15 分钟</option><option value="30m">30 分钟</option><option value="1h">1 小时</option><option value="4h">4 小时</option><option value="12h">12 小时</option><option value="1d">1 日</option><option value="1w">1 周</option></select></label>
+        <div class="result-tabs chart-mode-tabs" aria-label="图表模式"><button class="result-tab active" data-chart-mode="close" type="button">收盘 K 线</button><button class="result-tab" data-chart-mode="live" type="button">实时价格</button></div>
+        <div class="chart-indicator-settings" aria-label="独立图表指标">
+          <label class="chart-indicator-toggle"><input id="chartIndicatorEma" type="checkbox"><span>EMA</span><input id="chartIndicatorEmaPeriod" type="number" min="1" max="200" value="20" aria-label="EMA 周期"></label>
+          <label class="chart-indicator-toggle"><input id="chartIndicatorMa" type="checkbox"><span>MA</span><input id="chartIndicatorMaPeriod" type="number" min="1" max="200" value="20" aria-label="MA 周期"></label>
+          <label class="chart-indicator-toggle"><input id="chartIndicatorBb" type="checkbox"><span>BB</span><input id="chartIndicatorBbPeriod" type="number" min="1" max="200" value="20" aria-label="布林带周期"><input id="chartIndicatorBbDeviation" type="number" min="0.1" max="10" step="0.1" value="2" aria-label="布林带倍数"></label>
+        </div>
+        <span id="chartStatus" class="chart-status hidden" role="status"></span>
+        <a id="chartTradeLink" class="secondary-button chart-trade-link" target="_blank" rel="noopener noreferrer">Deepcoin ↗</a>
+      </div>
+      <div id="chartConditionReadout" class="chart-condition-readout"></div>
+      <div class="chart-stage">
+        <div id="priceChart" class="price-chart"></div>
+        <div class="chart-overlay">
+          <div class="chart-overlay-main"><div id="chartLegend" class="chart-legend"></div><div id="chartOhlcReadout" class="chart-ohlc-readout"></div></div>
+          <div id="chartLevelReadout" class="chart-level-readout hidden"></div>
+        </div>
+        <div id="chartMessage" class="chart-message hidden" role="status"></div>
+      </div>
+      <div id="indicatorChart" class="indicator-chart hidden"></div>
+      <footer class="chart-footer">行情数据来自 Deepcoin 公开行情 · 图表由 <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView Lightweight Charts</a> 提供</footer>
+    </section>
+    <div id="carouselOverlay" class="carousel-overlay hidden"><span id="carouselPosition"></span><span id="carouselRankStatus" class="carousel-rank-status"></span><button id="carouselPause" type="button">暂停</button><button id="carouselNext" type="button">下一个</button><button id="carouselExit" type="button">关闭轮播</button></div>
+    <button id="carouselPrevious" class="carousel-previous-fallback" type="button">上一个</button>
+  </dialog>
+  <template id="conditionTemplate">
+    <div class="condition-row">
+      <span class="condition-index"></span>
+      <label class="condition-field">周期<select class="condition-timeframe" title="该条件使用的 K 线周期"><option value="1m">1分钟</option><option value="5m">5分钟</option><option value="15m">15分钟</option><option value="30m">30分钟</option><option value="1h" selected>1小时</option><option value="4h">4小时</option><option value="12h">12小时</option><option value="1d">1日</option><option value="1w">1周</option></select></label>
+      <label class="condition-field">左指标<select class="condition-indicator">
+        <optgroup label="行情"><option value="price" selected>最新价</option><option value="change24h">24h 涨跌幅 (%)</option><option value="volume24h">24h 成交额</option></optgroup>
+        <optgroup label="常用指标"><option value="ma">MA</option><option value="ema">EMA</option><option value="rsi">RSI</option><option value="bb_upper">布林上轨</option><option value="bb_middle">布林中轨</option><option value="bb_lower">布林下轨</option><option value="bb_width">布林带宽 (%)</option></optgroup>
+        <optgroup label="关键位指标"><option value="key_levels">关键位指标</option></optgroup>
+      </select></label>
+      <label class="condition-field key-level-signal-field hidden">指标信号<select class="condition-key-level-signal">
+        <optgroup label="区域状态"><option value="support_exists">存在支撑区域</option><option value="resistance_exists">存在压力区域</option><option value="high_quality_support">高质量支撑</option><option value="high_quality_resistance">高质量压力</option><option value="support_near">价格接近支撑</option><option value="resistance_near">价格接近压力</option></optgroup>
+        <optgroup label="裸K形态"><option value="support_hammer_rejection">支撑锤型线拒绝</option><option value="resistance_inverted_hammer_rejection">压力位长上影拒绝</option></optgroup>
+        <optgroup label="收盘事件"><option value="support_touch">收盘触碰支撑</option><option value="resistance_touch">收盘触碰压力</option><option value="support_break">收盘跌破支撑</option><option value="resistance_break">收盘突破压力</option><option value="support_retest">支撑回踩确认</option><option value="resistance_retest">压力回踩确认</option></optgroup>
+        <optgroup label="参考位"><option value="price_above_vwap">价格高于会话 VWAP</option><option value="price_below_vwap">价格低于会话 VWAP</option><option value="price_above_previous_day_high">价格高于前日高点</option><option value="price_below_previous_day_low">价格低于前日低点</option><option value="price_above_previous_week_high">价格高于前周高点</option><option value="price_below_previous_week_low">价格低于前周低点</option><option value="price_above_day_open">价格高于当日开盘</option><option value="price_below_day_open">价格低于当日开盘</option></optgroup>
+      </select></label>
+      <label class="condition-field key-level-threshold-field hidden"><span class="key-level-threshold-label">质量分下限</span><input class="condition-key-level-threshold" type="number" min="0" max="100" step="any" value="60"></label>
+      <label class="condition-field left-period-field hidden">左周期<input class="condition-period" type="number" min="1" max="200" value="20"></label>
+      <label class="condition-field">比较<select class="condition-operator"><option value=">" selected>大于</option><option value=">=">大于等于</option><option value="<">小于</option><option value="<=">小于等于</option><option value="=">等于</option><option value="!=">不等于</option><option value="within_percent">指标上下百分比内</option></select></label>
+      <label class="condition-field">右侧类型<select class="condition-value-type"><option value="number" selected>数值</option><option value="indicator">指标</option><option value="boolean">状态</option></select></label>
+      <label class="condition-field numeric-value-field">数值<input class="condition-value" type="number" step="any" value="0" placeholder="例如 50"></label>
+      <label class="condition-field boolean-value-field hidden">状态<select class="condition-boolean-value"><option value="true" selected>是</option><option value="false">否</option></select></label>
+      <label class="condition-field right-indicator-field hidden">右指标<select class="condition-value-indicator">
+        <option value="price">最新价</option><option value="ma">MA</option><option value="ema">EMA</option><option value="rsi">RSI</option><option value="bb_upper">布林上轨</option><option value="bb_middle">布林中轨</option><option value="bb_lower">布林下轨</option>
+      </select></label>
+      <label class="condition-field right-period-field hidden">右周期<input class="condition-value-period" type="number" min="1" max="200" value="60"></label>
+      <button class="remove-condition" type="button" title="删除条件">×</button><div class="condition-summary"></div>
+      <label class="condition-field key-level-lookback-field hidden">回看已收盘 K 线<select class="condition-key-level-lookback"><option value="1">1 根</option><option value="3">3 根</option><option value="6">6 根</option><option value="12">12 根</option><option value="24" selected>24 根</option><option value="48">48 根</option><option value="100">100 根</option></select></label>
+    </div>
+  </template>
+  <script src="/vendor/lightweight-charts.standalone.production.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
