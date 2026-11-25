@@ -7,6 +7,163 @@ import app
 
 
 class CarouselTests(unittest.TestCase):
+    def test_rank_uses_short_recent_candle_window(self):
+        market = {
+            "id": "BTC-USDT-SWAP", "symbol": "BTCUSDT", "quote": "USDT",
+            "webCatalogStatus": "available", "webListed": True,
+        }
+        with patch.object(app, "fetch_markets", return_value=[market]), \
+             patch.object(app, "fetch_tickers", return_value={market["id"]: {
+                 "last": 105.0, "volume24h": 1000.0, "change24h": 1.0,
+             }}), \
+             patch.object(app, "fetch_recent_candles", return_value=[
+                 [1, 100, 101, 99, 100, 1], [2, 101, 102, 100, 102, 1], [3, 102, 103, 101, 104, 1],
+             ]) as recent, \
+             patch.object(app, "website_catalog_health", return_value={"status": "ready"}):
+            result = app.rank_price_changes({"quote": "USDT", "timeframe": "1h", "maxSymbols": 1})
+
+        self.assertEqual(len(result["results"]), 1)
+        recent.assert_called_once_with("BTC-USDT-SWAP", "1h", limit=3, fast=True)
+
+    def test_rank_keeps_partial_results_when_one_candle_request_fails(self):
+        markets = [
+            {"id": "BTC-USDT-SWAP", "symbol": "BTCUSDT", "quote": "USDT"},
+            {"id": "ETH-USDT-SWAP", "symbol": "ETHUSDT", "quote": "USDT"},
+        ]
+        tickers = {
+            market["id"]: {"last": 105.0, "volume24h": 1.0, "change24h": 0.0}
+            for market in markets
+        }
+        with patch.object(app, "fetch_markets", return_value=markets), \
+             patch.object(app, "fetch_tickers", return_value=tickers), \
+             patch.object(app, "fetch_recent_candles", side_effect=[
+                 [[1, 100, 101, 99, 100, 1], [2, 101, 102, 100, 102, 1], [3, 102, 103, 101, 104, 1]],
+                 app.DeepcoinError("temporary network error"),
+             ]), \
+             patch.object(app, "website_catalog_health", return_value={"status": "ready"}):
+            result = app.rank_price_changes({"quote": "USDT", "timeframe": "1h", "maxSymbols": 2})
+
+        self.assertEqual(len(result["results"]), 1)
+        self.assertEqual(result["failed"], 1)
+        self.assertTrue(result["errors"])
+
+    def test_rank_falls_back_to_closed_candles_when_tickers_fail(self):
+        market = {
+            "id": "BTC-USDT-SWAP", "symbol": "BTCUSDT", "quote": "USDT",
+            "webCatalogStatus": "available", "webListed": True,
+        }
+        with patch.object(app, "fetch_markets", return_value=[market]), \
+             patch.object(app, "fetch_tickers", side_effect=app.DeepcoinError("ticker unavailable")), \
+             patch.object(app, "fetch_recent_candles", return_value=[
+                 [1, 100, 101, 99, 100, 1], [2, 101, 102, 100, 110, 1],
+             ]), \
+             patch.object(app, "website_catalog_health", return_value={"status": "ready"}):
+            result = app.rank_price_changes({"quote": "USDT", "timeframe": "1h", "maxSymbols": 1})
+
+        self.assertEqual(len(result["results"]), 1)
+        self.assertEqual(result["results"][0]["changePercent"], 10.0)
+        self.assertEqual(result["results"][0]["price"], 110.0)
+        self.assertIn("????????", result["errors"][0])
+
+    def test_carousel_skips_only_contracts_removed_after_ranking(self):
+        market = {
+            "id": "BTC-USDT-SWAP", "symbol": "BTCUSDT", "quote": "USDT",
+            "webCatalogStatus": "available", "webListed": True,
+        }
+        display = {"index": 0, "name": "DISPLAY1", "left": 0, "top": 0,
+                   "width": 1920, "height": 1080, "primary": True}
+        process = type("Process", (), {"pid": 1234})()
+
+        class ImmediateThread:
+            def __init__(self, target, args=(), **_kwargs):
+                self.target, self.args = target, args
+
+            def start(self):
+                self.target(*self.args)
+
+        with patch.object(app, "fetch_markets", return_value=[market]), \
+             patch.object(app, "carousel_displays", return_value=[display]), \
+             patch.object(app, "_carousel_browser", return_value="C:/Edge/msedge.exe"), \
+             patch.object(app.subprocess, "Popen", return_value=process), \
+             patch.object(app.threading, "Thread", ImmediateThread), \
+             patch.object(app.tempfile, "gettempdir", return_value="C:/Temp"), \
+             patch.object(app.Path, "mkdir"), \
+             patch.object(app, "_position_carousel_window"):
+            result = app.open_carousel_window({
+                "instIds": ["BTC-USDT-SWAP", "REMOVED-USDT-SWAP"],
+                "quote": "USDT", "timeframe": "1h", "displayIndex": 0,
+            })
+
+        self.assertEqual(result["startedCount"], 1)
+        self.assertEqual(result["skippedCount"], 1)
+
+    def test_carousel_accepts_a_full_rank_snapshot(self):
+        markets = [
+            {"id": f"COIN{index}-USDT-SWAP", "symbol": f"COIN{index}USDT", "quote": "USDT",
+             "webCatalogStatus": "available", "webListed": True}
+            for index in range(101)
+        ]
+        display = {"index": 0, "name": "DISPLAY1", "left": 0, "top": 0,
+                   "width": 1920, "height": 1080, "primary": True}
+        process = type("Process", (), {"pid": 1234})()
+        class ImmediateThread:
+            def __init__(self, target, args=(), **_kwargs):
+                self.target, self.args = target, args
+
+            def start(self):
+                self.target(*self.args)
+
+        with patch.object(app, "fetch_markets", return_value=markets), \
+             patch.object(app, "carousel_displays", return_value=[display]), \
+             patch.object(app, "_carousel_browser", return_value="C:/Edge/msedge.exe"), \
+             patch.object(app.subprocess, "Popen", return_value=process), \
+             patch.object(app.threading, "Thread", ImmediateThread), \
+             patch.object(app.tempfile, "gettempdir", return_value="C:/Temp"), \
+             patch.object(app.Path, "mkdir"), \
+             patch.object(app, "_position_carousel_window"):
+            result = app.open_carousel_window({
+                "instIds": [market["id"] for market in markets], "quote": "USDT",
+                "timeframe": "1h", "displayIndex": 0,
+            })
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["url"].count("-USDT-SWAP"), 101)
+
+    def test_large_carousel_snapshot_uses_local_session_token(self):
+        markets = [
+            {"id": f"LONGCOIN{index:03d}-USDT-SWAP", "symbol": f"LONGCOIN{index:03d}USDT", "quote": "USDT",
+             "webCatalogStatus": "available", "webListed": True}
+            for index in range(400)
+        ]
+        display = {"index": 0, "name": "DISPLAY1", "left": 0, "top": 0,
+                   "width": 1920, "height": 1080, "primary": True}
+        process = type("Process", (), {"pid": 1234})()
+        class ImmediateThread:
+            def __init__(self, target, args=(), **_kwargs):
+                self.target, self.args = target, args
+
+            def start(self):
+                self.target(*self.args)
+
+        with patch.object(app, "fetch_markets", return_value=markets), \
+             patch.object(app, "carousel_displays", return_value=[display]), \
+             patch.object(app, "_carousel_browser", return_value="C:/Edge/msedge.exe"), \
+             patch.object(app.subprocess, "Popen", return_value=process), \
+             patch.object(app.threading, "Thread", ImmediateThread), \
+             patch.object(app.tempfile, "gettempdir", return_value="C:/Temp"), \
+             patch.object(app.Path, "mkdir"), \
+             patch.object(app, "_position_carousel_window"):
+            result = app.open_carousel_window({
+                "instIds": [market["id"] for market in markets], "quote": "USDT",
+                "timeframe": "1h", "displayIndex": 0,
+            })
+
+        self.assertIn("carouselToken=", result["url"])
+        token = result["url"].split("carouselToken=", 1)[1]
+        query = app.carousel_session_query(token)
+        self.assertIsNotNone(query)
+        self.assertEqual(query.count("-USDT-SWAP"), 400)
+
     def test_rank_snapshot_cache_reuses_matching_results_and_returns_copies(self):
         payload = {
             "quote": "USDT", "timeframe": "1h", "direction": "desc",
@@ -40,9 +197,9 @@ class CarouselTests(unittest.TestCase):
 
     def test_carousel_rejects_invalid_interval_and_unknown_market(self):
         with patch.object(app, "fetch_markets", return_value=[]):
-            with self.assertRaisesRegex(ValueError, "交易对数量"):
+            with self.assertRaisesRegex(ValueError, "?????"):
                 app.open_carousel_window({"instIds": []})
-            with self.assertRaisesRegex(ValueError, "官网核验目录"):
+            with self.assertRaisesRegex(ValueError, "??????"):
                 app.open_carousel_window({"instIds": ["UNKNOWN-USDT-SWAP"], "interval": 1})
 
     def test_carousel_starts_browser_with_verified_ids_and_settings(self):

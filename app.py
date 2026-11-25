@@ -50,6 +50,9 @@ def runtime_version() -> str:
 
 APP_VERSION = runtime_version()
 _update_requested_callback: Callable[[], None] | None = None
+_update_task_lock = threading.Lock()
+_update_task: threading.Thread | None = None
+_update_task_state: dict[str, Any] = {"status": "idle", "error": None, "version": None}
 
 
 def set_update_requested_callback(callback: Callable[[], None] | None) -> None:
@@ -58,19 +61,61 @@ def set_update_requested_callback(callback: Callable[[], None] | None) -> None:
     _update_requested_callback = callback
 
 
+def _run_scheduled_update(release: dict[str, Any]) -> None:
+    """Download an update outside the HTTP handler so the UI stays responsive."""
+    global _update_task_state
+    from updater import schedule_update_if_available
+
+    try:
+        scheduled = schedule_update_if_available(release=release)
+        with _update_task_lock:
+            _update_task_state = {
+                "status": "scheduled" if scheduled else "failed",
+                "error": None if scheduled else "????????",
+                "version": str(release.get("tag_name", "")),
+            }
+        if scheduled and _update_requested_callback:
+            _update_requested_callback()
+    except Exception as error:  # updater must never terminate the server thread
+        with _update_task_lock:
+            _update_task_state = {
+                "status": "failed", "error": str(error),
+                "version": str(release.get("tag_name", "")),
+            }
+
+
+def _start_scheduled_update(release: dict[str, Any]) -> bool:
+    global _update_task
+    with _update_task_lock:
+        if _update_task and _update_task.is_alive():
+            return False
+        _update_task_state.update({
+            "status": "downloading", "error": None,
+            "version": str(release.get("tag_name", "")),
+        })
+        _update_task = threading.Thread(
+            target=_run_scheduled_update, args=(release,),
+            name="deepcoin-update-download", daemon=True,
+        )
+        _update_task.start()
+        return True
+
+
 def update_check(schedule: bool = False) -> dict[str, Any]:
     """Check GitHub and optionally stage a packaged update for launcher replacement."""
     from updater import check_for_update, schedule_update_if_available
 
     result = check_for_update()
     release = result.pop("_release", None)
-    result["scheduled"] = False
-    result["scheduleError"] = None
+    with _update_task_lock:
+        task_state = dict(_update_task_state)
+    result["scheduled"] = task_state.get("status") in {"downloading", "scheduled"}
+    result["scheduleError"] = task_state.get("error")
+    result["updateStatus"] = task_state.get("status", "idle")
     if schedule and result.get("updateAvailable") and result.get("packaged"):
-        if schedule_update_if_available(release=release):
-            result["scheduled"] = True
-            if _update_requested_callback:
-                _update_requested_callback()
+        started = _start_scheduled_update(release)
+        result["scheduled"] = True
+        result["updateStatus"] = "downloading" if started else task_state.get("status", "downloading")
     return result
 API_BASE = "https://api.deepcoin.com"
 WEB_API_BASE = "https://net-wapi.deepcoin.com"
@@ -86,7 +131,12 @@ INDICATOR_HISTORY_MULTIPLIER = 10
 HTTP_TIMEOUT = 8
 HTTP_ATTEMPTS = 2
 MAX_WORKERS = 24
-CAROUSEL_MAX_SYMBOLS = 100
+# A ranking can contain the complete verified catalogue. Chromium accepts this
+# query comfortably, and keeping the whole ordered list lets the carousel
+# rotate through every eligible contract instead of failing above 100 rows.
+CAROUSEL_MAX_SYMBOLS = 1000
+CAROUSEL_INLINE_QUERY_LIMIT = 6000
+CAROUSEL_SESSION_TTL = 2 * 3600
 CAROUSEL_MIN_INTERVAL = 5
 CAROUSEL_MAX_INTERVAL = 3600
 _candle_cache: dict[tuple[str, str], tuple[float, list[list[float]]]] = {}
@@ -100,13 +150,15 @@ _key_level_snapshot_cache: OrderedDict[tuple[Any, ...], dict[str, Any] | None] =
 _key_level_snapshot_cache_lock = threading.Lock()
 KEY_LEVEL_SNAPSHOT_CACHE_SIZE = 2048
 _candle_db_lock = threading.Lock()
+_carousel_session_lock = threading.Lock()
+_carousel_sessions: dict[str, tuple[float, str]] = {}
 _cache_root = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / ".cache")) / "DeepcoinScreen"
 CANDLE_CACHE_PATH = _cache_root / "candles.sqlite3"
 KEY_LEVEL_FEATURES = feature_names()
 KEY_LEVEL_RECENT_HAMMER_FEATURE = "kl_event_support_hammer_recent"
-KEY_LEVEL_FEATURES[KEY_LEVEL_RECENT_HAMMER_FEATURE] = "近期支撑锤型拒绝"
+KEY_LEVEL_FEATURES[KEY_LEVEL_RECENT_HAMMER_FEATURE] = "????????"
 KEY_LEVEL_RECENT_INVERTED_HAMMER_FEATURE = "kl_event_resistance_inverted_hammer_recent"
-KEY_LEVEL_FEATURES[KEY_LEVEL_RECENT_INVERTED_HAMMER_FEATURE] = "近期压力位长上影拒绝"
+KEY_LEVEL_FEATURES[KEY_LEVEL_RECENT_INVERTED_HAMMER_FEATURE] = "??????????"
 KEY_LEVEL_BINARY_FEATURES = binary_features()
 KEY_LEVEL_BINARY_FEATURES.update({
     KEY_LEVEL_RECENT_HAMMER_FEATURE, KEY_LEVEL_RECENT_INVERTED_HAMMER_FEATURE,
@@ -149,7 +201,7 @@ KEY_LEVEL_HTF_WARMUP = (
 def carousel_displays() -> list[dict[str, Any]]:
     """Return physical monitor bounds used by the Windows carousel launcher."""
     if os.name != "nt":
-        return [{"index": 0, "name": "当前窗口", "left": 0, "top": 0, "width": 0, "height": 0, "primary": True}]
+        return [{"index": 0, "name": "????", "left": 0, "top": 0, "width": 0, "height": 0, "primary": True}]
     import ctypes
     from ctypes import wintypes
 
@@ -180,7 +232,7 @@ def carousel_displays() -> list[dict[str, Any]]:
             device_match = re.search(r"DISPLAY(\d+)", device_name, re.IGNORECASE)
             screen_number = int(device_match.group(1)) if device_match else len(monitors) + 1
             monitors.append({
-                "name": str(info.szDevice).strip() or f"显示器 {len(monitors) + 1}",
+                "name": str(info.szDevice).strip() or f"??? {len(monitors) + 1}",
                 "screenNumber": screen_number,
                 "name": f"DISPLAY{screen_number}",
                 "left": int(rect.left), "top": int(rect.top),
@@ -194,7 +246,7 @@ def carousel_displays() -> list[dict[str, Any]]:
     monitors.sort(key=lambda item: (not item["primary"], item["top"], item["left"]))
     for index, monitor in enumerate(monitors):
         monitor["index"] = index
-    return monitors or [{"index": 0, "name": "主显示器", "left": 0, "top": 0, "width": 0, "height": 0, "primary": True}]
+    return monitors or [{"index": 0, "name": "????", "left": 0, "top": 0, "width": 0, "height": 0, "primary": True}]
 
 
 def _carousel_browser() -> str | None:
@@ -241,18 +293,24 @@ def _position_carousel_window(process_id: int, display: dict[str, Any]) -> None:
 
 def open_carousel_window(payload: dict[str, Any]) -> dict[str, Any]:
     """Launch the carousel as a dedicated browser app and place it on one monitor."""
-    inst_ids = [str(item).strip() for item in payload.get("instIds", []) if str(item).strip()]
+    inst_ids = []
+    seen_ids: set[str] = set()
+    for item in payload.get("instIds", []):
+        value = str(item).strip()
+        if value and value not in seen_ids:
+            seen_ids.add(value)
+            inst_ids.append(value)
     if not inst_ids or len(inst_ids) > CAROUSEL_MAX_SYMBOLS:
-        raise ValueError(f"轮播交易对数量应为 1 到 {CAROUSEL_MAX_SYMBOLS} 个")
+        raise ValueError(f"????????? 1 ? {CAROUSEL_MAX_SYMBOLS} ?")
     timeframe = str(payload.get("timeframe", "1h"))
     if timeframe not in TIMEFRAMES:
-        raise ValueError("不支持的轮播周期")
+        raise ValueError("????????")
     mode = str(payload.get("mode", "close"))
     if mode not in {"close", "live"}:
-        raise ValueError("不支持的轮播模式")
+        raise ValueError("????????")
     source = str(payload.get("source", "screen"))
     if source not in {"screen", "ranking"}:
-        raise ValueError("不支持的轮播来源")
+        raise ValueError("????????")
     try:
         interval = int(payload.get("interval", 15))
     except (TypeError, ValueError):
@@ -265,14 +323,19 @@ def open_carousel_window(payload: dict[str, Any]) -> dict[str, Any]:
         display_index = 0
     display = next((item for item in displays if item["index"] == display_index), None)
     if display is None:
-        raise ValueError("指定显示器不存在，请重新打开轮播设置")
+        raise ValueError("??????????????????")
     current_ids = {market["id"] for market in fetch_markets()}
     invalid_ids = sorted(set(inst_ids) - current_ids)
+    # A ranking snapshot can be older than the directory audit by a few
+    # seconds. Skip contracts delisted in the meantime instead of rejecting
+    # the complete carousel.
     if invalid_ids:
-        raise ValueError("部分交易对已不在当前官网核验目录，请重新筛选后轮播")
+        inst_ids = [inst_id for inst_id in inst_ids if inst_id in current_ids]
+    if not inst_ids:
+        raise ValueError("???????????????????????????????")
     conditions = payload.get("conditions") or []
     if not isinstance(conditions, list) or len(conditions) > 12:
-        raise ValueError("轮播条件格式无效")
+        raise ValueError("????????")
     validate_conditions(conditions)
     chart_indicators = validate_chart_indicators(payload.get("chartIndicators"))
     rank_params: dict[str, Any] = {}
@@ -281,19 +344,19 @@ def open_carousel_window(payload: dict[str, Any]) -> dict[str, Any]:
         ranking = payload.get("ranking") or {}
         rank_timeframe = str(ranking.get("timeframe", timeframe))
         if rank_timeframe not in TIMEFRAMES:
-            raise ValueError("不支持的涨跌幅排序周期")
+            raise ValueError("???????????")
         rank_direction = str(ranking.get("direction", "desc"))
         if rank_direction not in {"asc", "desc"}:
-            raise ValueError("涨跌幅排序方向无效")
+            raise ValueError("?????????")
         rank_quote = str(ranking.get("quote", payload.get("quote", "USDT"))).upper()
         if rank_quote not in {"USDT", "USDC"}:
-            raise ValueError("不支持的结算币")
+            raise ValueError("???????")
         try:
             rank_max_symbols = int(ranking.get("maxSymbols", 100))
             refresh_seconds = int(ranking.get("refreshSeconds", 0))
             first_refresh_seconds = int(ranking.get("firstRefreshSeconds", refresh_seconds))
         except (TypeError, ValueError):
-            raise ValueError("涨跌幅自动更新设置无效") from None
+            raise ValueError("???????????") from None
         rank_max_symbols = max(1, min(1000, rank_max_symbols))
         refresh_seconds = 0 if refresh_seconds <= 0 else max(30, min(3600, refresh_seconds))
         first_refresh_seconds = max(1, min(refresh_seconds, first_refresh_seconds)) if refresh_seconds else 0
@@ -314,10 +377,22 @@ def open_carousel_window(payload: dict[str, Any]) -> dict[str, Any]:
         "chartIndicators": json.dumps(chart_indicators, separators=(",", ":")),
         "conditions": json.dumps(conditions, ensure_ascii=False, separators=(",", ":")),
     })
-    url = f"http://127.0.0.1:{port}/carousel?{query}"
+    # Windows limits the command line passed to a new browser process. Store
+    # long ranking snapshots in the local service and pass only a short token.
+    if len(query) > CAROUSEL_INLINE_QUERY_LIMIT:
+        token = secrets.token_urlsafe(18)
+        now = time.monotonic()
+        with _carousel_session_lock:
+            for old_token, (created_at, _old_query) in list(_carousel_sessions.items()):
+                if now - created_at > CAROUSEL_SESSION_TTL:
+                    _carousel_sessions.pop(old_token, None)
+            _carousel_sessions[token] = (now, query)
+        url = f"http://127.0.0.1:{port}/carousel?carouselToken={urlquote(token, safe='')}"
+    else:
+        url = f"http://127.0.0.1:{port}/carousel?{query}"
     browser = _carousel_browser()
     if not browser:
-        raise ValueError("未找到 Microsoft Edge 或 Google Chrome，无法定位到指定显示器")
+        raise ValueError("??? Microsoft Edge ? Google Chrome???????????")
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     profile_dir = Path(tempfile.gettempdir()) / f"DeepcoinScreen-carousel-{os.getpid()}-{secrets.token_hex(4)}"
     profile_dir.mkdir(parents=True, exist_ok=False)
@@ -333,7 +408,24 @@ def open_carousel_window(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "ok": True, "pid": process.pid, "url": url, "display": display,
         "interval": interval, "source": source, "rankRefreshSeconds": refresh_seconds,
+        "requestedCount": len(inst_ids) + len(invalid_ids), "startedCount": len(inst_ids),
+        "skippedCount": len(invalid_ids),
     }
+
+
+def carousel_session_query(token: str) -> str | None:
+    token = str(token or "").strip()
+    if not token:
+        return None
+    with _carousel_session_lock:
+        entry = _carousel_sessions.get(token)
+        if not entry:
+            return None
+        created_at, query = entry
+        if time.monotonic() - created_at > CAROUSEL_SESSION_TTL:
+            _carousel_sessions.pop(token, None)
+            return None
+        return query
 
 
 class DeepcoinError(RuntimeError):
@@ -355,49 +447,51 @@ def _request_error_message(service: str, url: str, exc: Exception) -> str:
     host = urlparse(url).hostname or "Deepcoin"
     reason = exc.reason if isinstance(exc, URLError) else exc
     if isinstance(exc, HTTPError):
-        return f"{service}返回 HTTP {exc.code}（{host}）"
+        return f"{service}?? HTTP {exc.code}?{host}?"
     if isinstance(reason, (TimeoutError, socket.timeout)):
-        return f"{service}连接超时（{host}）。请检查网络/VPN/代理后重试。"
+        return f"{service}?????{host}???????/VPN/??????"
     if isinstance(reason, ConnectionRefusedError):
-        return f"{service}连接被拒绝（{host}）。请检查网络/VPN/代理后重试。"
+        return f"{service}??????{host}???????/VPN/??????"
     if isinstance(reason, socket.gaierror):
-        return f"{service}域名解析失败（{host}）。请检查 DNS、网络或代理设置。"
-    return f"{service}请求失败（{host}）：{exc!r}"
+        return f"{service}???????{host}????? DNS?????????"
+    return f"{service}?????{host}??{exc!r}"
 
 
-def _request_json(request: Request, service: str) -> Any:
+def _request_json(request: Request, service: str, *, timeout: int = HTTP_TIMEOUT,
+                  attempts: int = HTTP_ATTEMPTS) -> Any:
     last_error: Exception | None = None
     opener = build_opener()
-    for attempt in range(HTTP_ATTEMPTS):
+    for attempt in range(max(1, attempts)):
         try:
-            with opener.open(request, timeout=HTTP_TIMEOUT) as response:
+            with opener.open(request, timeout=timeout) as response:
                 raw = response.read().decode("utf-8")
         except Exception as exc:
             if isinstance(exc, HTTPError):
                 exc.close()
             last_error = exc
-            if attempt + 1 < HTTP_ATTEMPTS and _retryable_request_error(exc, request):
+            if attempt + 1 < max(1, attempts) and _retryable_request_error(exc, request):
                 time.sleep(0.25)
                 continue
             raise DeepcoinError(_request_error_message(service, request.full_url, exc)) from exc
         try:
             return json.loads(raw)
         except (TypeError, ValueError) as exc:
-            raise DeepcoinError(f"{service}返回的 JSON 格式无效") from exc
-    raise DeepcoinError(_request_error_message(service, request.full_url, last_error or RuntimeError("未知错误")))
+            raise DeepcoinError(f"{service}??? JSON ????") from exc
+    raise DeepcoinError(_request_error_message(service, request.full_url, last_error or RuntimeError("????")))
 
 
-def deepcoin_get(path: str, params: dict[str, Any] | None = None) -> Any:
+def deepcoin_get(path: str, params: dict[str, Any] | None = None, *, timeout: int = HTTP_TIMEOUT,
+                 attempts: int = HTTP_ATTEMPTS) -> Any:
     query = "?" + urlencode({key: value for key, value in (params or {}).items() if value is not None}) if params else ""
     request = Request(
         API_BASE + path + query,
         headers={"Accept": "application/json", "User-Agent": "deepcoin-screen/1.0"},
     )
-    payload = _request_json(request, "Deepcoin 行情接口")
+    payload = _request_json(request, "Deepcoin ????", timeout=timeout, attempts=attempts)
     if not isinstance(payload, dict):
-        raise DeepcoinError("Deepcoin 行情接口返回的数据结构无效")
+        raise DeepcoinError("Deepcoin ?????????????")
     if str(payload.get("code")) != "0":
-        raise DeepcoinError(payload.get("msg") or "Deepcoin 返回了错误")
+        raise DeepcoinError(payload.get("msg") or "Deepcoin ?????")
     return payload.get("data")
 
 
@@ -418,15 +512,15 @@ def website_catalog_request(system: str | None = None) -> dict[str, Any]:
         data=None if system is not None else json.dumps(params).encode("utf-8"),
         headers={"Accept": "application/json", "Content-Type": "application/json;charset=utf-8", "User-Agent": "Mozilla/5.0", "Origin": "https://www.deepcoin.com", "Referer": "https://www.deepcoin.com/", "platform": "pc", "x-requested-with": "XMLHttpRequest", "Cache-Control": "no-cache"},
     )
-    payload = _request_json(request, "Deepcoin 官网合约清单接口")
+    payload = _request_json(request, "Deepcoin ????????")
     if not isinstance(payload, dict) or str(payload.get("retCode")) != "0" or not isinstance(payload.get("retData"), dict):
-        raise DeepcoinError("官网合约清单结构或返回码异常")
+        raise DeepcoinError("??????????????")
     return payload["retData"]
 
 
 def website_symbols(rows: Any) -> set[str]:
     if not isinstance(rows, list) or any(not isinstance(row, dict) or not row.get("InstrumentID") for row in rows):
-        raise DeepcoinError("官网合约清单字段缺失或格式变化")
+        raise DeepcoinError("???????????????")
     return {str(row["InstrumentID"]).strip().upper() for row in rows if str(row.get("IsShow", "1")) == "1"}
 
 
@@ -469,7 +563,7 @@ def market_trade_navigation(market: dict[str, Any]) -> dict[str, Any]:
         "tradeUrl": market.get("tradeUrl") if confirmed else None,
         "webSymbol": market.get("webSymbol"),
         "webTradeStatus": "available" if confirmed else "unverified",
-        "webTradeReason": "" if confirmed else "官网入口尚未确认",
+        "webTradeReason": "" if confirmed else "????????",
     }
 
 
@@ -496,8 +590,11 @@ def finalize_market_response(payload: dict[str, Any], request: dict[str, Any]) -
     return payload
 
 
-def fetch_tickers() -> dict[str, dict[str, Any]]:
-    data = deepcoin_get("/deepcoin/market/tickers", {"instType": "SWAP"}) or []
+def fetch_tickers(*, timeout: int = HTTP_TIMEOUT, attempts: int = HTTP_ATTEMPTS) -> dict[str, dict[str, Any]]:
+    data = deepcoin_get(
+        "/deepcoin/market/tickers", {"instType": "SWAP"},
+        timeout=timeout, attempts=attempts,
+    ) or []
     result = {}
     for item in data:
         if item.get("instId"):
@@ -536,15 +633,20 @@ def parse_candle_rows(rows: Any) -> list[list[float]]:
     return candles
 
 
-def request_candle_page(inst_id: str, timeframe: str, limit: int, after: int | None = None) -> list[list[float]]:
-    rows = deepcoin_get(
-        "/deepcoin/market/candles",
-        {"instId": inst_id, "bar": DEEPCOIN_BARS[timeframe], "limit": limit, "after": after},
-    ) or []
+def request_candle_page(inst_id: str, timeframe: str, limit: int, after: int | None = None,
+                        *, timeout: int = HTTP_TIMEOUT, attempts: int = HTTP_ATTEMPTS) -> list[list[float]]:
+    params = {"instId": inst_id, "bar": DEEPCOIN_BARS[timeframe], "limit": limit, "after": after}
+    # Keep the historical two-argument call for the default path. Besides
+    # avoiding needless keyword work, this preserves compatibility with
+    # integrations that replace deepcoin_get with a simple callable.
+    if timeout == HTTP_TIMEOUT and attempts == HTTP_ATTEMPTS:
+        rows = deepcoin_get("/deepcoin/market/candles", params) or []
+    else:
+        rows = deepcoin_get("/deepcoin/market/candles", params, timeout=timeout, attempts=attempts) or []
     return parse_candle_rows(rows)
 
 
-def fetch_recent_candles(inst_id: str, timeframe: str, limit: int = 20) -> list[list[float]]:
+def fetch_recent_candles(inst_id: str, timeframe: str, limit: int = 20, *, fast: bool = False) -> list[list[float]]:
     """Fetch a short current-inclusive window for Pine's daily/weekly references and VWAP."""
     limit = max(2, min(CANDLE_PAGE_SIZE, int(limit)))
     cache_key = (inst_id, timeframe, limit)
@@ -553,7 +655,11 @@ def fetch_recent_candles(inst_id: str, timeframe: str, limit: int = 20) -> list[
         cached = _recent_candle_cache.get(cache_key)
         if cached and now - cached[0] < 20:
             return list(cached[1])
-    candles = request_candle_page(inst_id, timeframe, limit)
+    candles = request_candle_page(
+        inst_id, timeframe, limit,
+        timeout=5 if fast else HTTP_TIMEOUT,
+        attempts=1 if fast else HTTP_ATTEMPTS,
+    )
     candles = sorted({int(row[0]): row for row in candles}.values(), key=lambda row: int(row[0]))[-limit:]
     with _candle_cache_lock:
         _recent_candle_cache[cache_key] = (now, candles)
@@ -901,7 +1007,7 @@ def evaluate_condition(condition: dict[str, Any], metrics: dict[str, Any], close
 def condition_timeframe(condition: dict[str, Any], default: str) -> str:
     timeframe = str(condition.get("timeframe") or default)
     if timeframe not in TIMEFRAMES:
-        raise ValueError(f"不支持的条件周期：{timeframe}")
+        raise ValueError(f"?????????{timeframe}")
     return timeframe
 
 
@@ -909,26 +1015,26 @@ def screening_condition_label(condition: dict[str, Any], default_timeframe: str)
     timeframe = condition_timeframe(condition, default_timeframe)
     if condition.get("indicator") == "key_levels":
         signal_names = {
-            "support_exists": "存在支撑区域", "resistance_exists": "存在压力区域",
-            "high_quality_support": "高质量支撑", "high_quality_resistance": "高质量压力",
-            "support_near": "价格接近支撑", "resistance_near": "价格接近压力",
-            "support_hammer_rejection": "支撑锤型线拒绝",
-            "resistance_inverted_hammer_rejection": "压力位长上影拒绝",
-            "support_touch": "收盘触碰支撑", "resistance_touch": "收盘触碰压力",
-            "support_break": "收盘跌破支撑", "resistance_break": "收盘突破压力",
-            "support_retest": "支撑回踩确认", "resistance_retest": "压力回踩确认",
+            "support_exists": "??????", "resistance_exists": "??????",
+            "high_quality_support": "?????", "high_quality_resistance": "?????",
+            "support_near": "??????", "resistance_near": "??????",
+            "support_hammer_rejection": "???????",
+            "resistance_inverted_hammer_rejection": "????????",
+            "support_touch": "??????", "resistance_touch": "??????",
+            "support_break": "??????", "resistance_break": "??????",
+            "support_retest": "??????", "resistance_retest": "??????",
         }
-        signal = str(condition.get("keyLevelSignal", "关键位条件"))
+        signal = str(condition.get("keyLevelSignal", "?????"))
         label = signal_names.get(signal, signal)
         threshold = number(condition.get("keyLevelThreshold"))
         if threshold is not None and signal in KEY_LEVEL_SIGNAL_THRESHOLDS:
-            label += f" ≥ {threshold:g}" if not signal.endswith("_near") else f" ≤ {threshold:g} ATR"
-        return f"{label} · {timeframe}"
+            label += f" ? {threshold:g}" if not signal.endswith("_near") else f" ? {threshold:g} ATR"
+        return f"{label} ? {timeframe}"
 
     names = {
-        "price": "价格", "change24h": "24h涨跌幅", "volume24h": "24h成交额",
-        "ma": "MA", "ema": "EMA", "rsi": "RSI", "bb_upper": "布林上轨",
-        "bb_middle": "布林中轨", "bb_lower": "布林下轨", "bb_width": "布林带宽",
+        "price": "??", "change24h": "24h???", "volume24h": "24h???",
+        "ma": "MA", "ema": "EMA", "rsi": "RSI", "bb_upper": "????",
+        "bb_middle": "????", "bb_lower": "????", "bb_width": "????",
     }
 
     def indicator_label(name: str, period: Any) -> str:
@@ -939,15 +1045,15 @@ def screening_condition_label(condition: dict[str, Any], default_timeframe: str)
     operator = str(condition.get("operator", ">"))
     if operator == "within_percent":
         right = indicator_label(str(condition.get("valueIndicator", "price")), condition.get("valuePeriod"))
-        return f"{left} 距 {right} ≤ {number(condition.get('value')) or 0:g}% · {timeframe}"
+        return f"{left} ? {right} ? {number(condition.get('value')) or 0:g}% ? {timeframe}"
     if condition.get("valueType") == "indicator":
         right = indicator_label(str(condition.get("valueIndicator", "price")), condition.get("valuePeriod"))
     elif condition.get("valueType") == "boolean":
-        right = "是" if condition.get("booleanValue") else "否"
+        right = "?" if condition.get("booleanValue") else "?"
     else:
-        right = f"{number(condition.get('value')):g}" if number(condition.get("value")) is not None else "未填写"
-    operator_label = {">=": "≥", "<=": "≤", "=": "=", "!=": "≠"}.get(operator, operator)
-    return f"{left} {operator_label} {right} · {timeframe}"
+        right = f"{number(condition.get('value')):g}" if number(condition.get("value")) is not None else "???"
+    operator_label = {">=": "?", "<=": "?", "=": "=", "!=": "?"}.get(operator, operator)
+    return f"{left} {operator_label} {right} ? {timeframe}"
 
 
 def condition_has_missing_data(condition: dict[str, Any], metrics: dict[str, Any],
@@ -1004,39 +1110,39 @@ def validate_conditions(conditions: list[dict[str, Any]]) -> None:
             if (indicator != "price" or condition.get("valueType") != "indicator"
                     or right_indicator not in PRICE_SCALE_INDICATORS):
                 raise ValueError(
-                    f"第 {index} 条距离条件需要使用最新价，并选择 MA、EMA 或布林轨道指标。"
+                    f"? {index} ???????????????? MA?EMA ????????"
                 )
             tolerance = number(condition.get("value"))
             if tolerance is None or tolerance < 0 or tolerance > 100:
-                raise ValueError(f"第 {index} 条指标距离范围应在 0 到 100% 之间。")
+                raise ValueError(f"? {index} ????????? 0 ? 100% ???")
             continue
         if indicator == "key_levels":
             signal = str(condition.get("keyLevelSignal", ""))
             if signal not in KEY_LEVEL_SIGNALS:
-                raise ValueError(f"第 {index} 条条件请选择有效的关键位信号。")
+                raise ValueError(f"? {index} ???????????????")
             if signal in KEY_LEVEL_SIGNAL_THRESHOLDS:
                 threshold = number(condition.get("keyLevelThreshold"))
                 maximum = 10 if signal.endswith("_near") else 100
                 if threshold is None or threshold < 0 or threshold > maximum:
-                    raise ValueError(f"第 {index} 条关键位阈值应在 0 到 {maximum} 之间。")
+                    raise ValueError(f"? {index} ???????? 0 ? {maximum} ???")
             if signal in {"support_hammer_rejection", "resistance_inverted_hammer_rejection"}:
                 lookback = number(condition.get("keyLevelLookbackBars"))
                 if lookback is not None and (
                     lookback != int(lookback) or lookback < 1 or lookback > KEY_LEVEL_HAMMER_LOOKBACK_MAX
                 ):
                     raise ValueError(
-                        f"第 {index} 条裸K形态回看根数应为 1 到 {KEY_LEVEL_HAMMER_LOOKBACK_MAX} 的整数。"
+                        f"? {index} ??K???????? 1 ? {KEY_LEVEL_HAMMER_LOOKBACK_MAX} ????"
                     )
             continue
         is_binary = indicator in KEY_LEVEL_BINARY_FEATURES
         if is_binary:
             if condition.get("valueType") != "boolean":
-                raise ValueError(f"第 {index} 条条件是状态指标，请将右侧类型设为“状态”。")
+                raise ValueError(f"? {index} ??????????????????????")
             if str(condition.get("operator", "=")) not in {"=", "!="}:
-                raise ValueError(f"第 {index} 条条件是状态指标，只能使用“等于”或“不等于”。")
+                raise ValueError(f"? {index} ????????????????????????")
             continue
         if condition.get("valueType") == "boolean":
-            raise ValueError(f"第 {index} 条条件不是状态指标，请将右侧类型设为“数值”或“指标”。")
+            raise ValueError(f"? {index} ????????????????????????????")
         if condition.get("valueType") != "indicator":
             continue
         left_indicator = str(condition.get("indicator", "price"))
@@ -1049,18 +1155,18 @@ def validate_conditions(conditions: list[dict[str, Any]]) -> None:
         operator = str(condition.get("operator", ">"))
         if same_series and operator in {">", "<", "!=", "=", ">=", "<="}:
             indicator_names = {
-                "price": "最新价",
+                "price": "???",
                 "ma": "MA",
                 "ema": "EMA",
                 "rsi": "RSI",
-                "bb_upper": "布林上轨",
-                "bb_middle": "布林中轨",
-                "bb_lower": "布林下轨",
+                "bb_upper": "????",
+                "bb_middle": "????",
+                "bb_lower": "????",
             }
             label = f"{indicator_names.get(left_indicator, left_indicator)}({left_period})"
             if operator in {">", "<", "!="}:
-                raise ValueError(f"第 {index} 条条件无效：{label} 与 {label} 是同一个值，使用“不等于/大于/小于”永远不会命中。请修改右侧指标周期。")
-            raise ValueError(f"第 {index} 条条件恒为真：{label} 与 {label} 相同，不需要设置这条条件。")
+                raise ValueError(f"? {index} ??????{label} ? {label} ????????????/??/????????????????????")
+            raise ValueError(f"? {index} ???????{label} ? {label} ?????????????")
 
 
 def expand_key_level_conditions(conditions: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1146,10 +1252,18 @@ def rank_price_changes(payload: dict[str, Any]) -> dict[str, Any]:
     started_at = time.perf_counter()
     timeframe = str(payload.get("timeframe", "1h"))
     if timeframe not in TIMEFRAMES:
-        raise ValueError("不支持的涨跌幅周期")
+        raise ValueError("?????????")
     quote = str(payload.get("quote", "USDT")).upper()
     all_markets = [market for market in fetch_markets() if market["quote"] == quote]
-    tickers = fetch_tickers()
+    ticker_error: str | None = None
+    try:
+        # The ranking can fall back to closed candles while the aggregate
+        # ticker endpoint is recovering. Keep this request short so a TLS
+        # failure does not make the button appear frozen.
+        tickers = fetch_tickers(timeout=5, attempts=1)
+    except DeepcoinError as exc:
+        tickers = {}
+        ticker_error = str(exc)
     requested = [item.strip().upper() for item in str(payload.get("symbols", "")).split(",") if item.strip()]
     if requested:
         requested_set = set(requested)
@@ -1164,15 +1278,18 @@ def rank_price_changes(payload: dict[str, Any]) -> dict[str, Any]:
 
     def load_change(market: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
         try:
-            candles = fetch_candles(market["id"], timeframe, required_period=1, limit_override=3)
+            # Ranking needs only the previous closed bar and the latest bar.
+            # Use the short-lived recent cache so hundreds of rows do not each
+            # trigger the full paginated history path.
+            candles = fetch_recent_candles(market["id"], timeframe, limit=3, fast=True)
             ticker = tickers.get(market["id"], {})
             if len(candles) < 2:
-                return None, f"{market['symbol']} {timeframe}: K 线数量不足"
+                return None, f"{market['symbol']} {timeframe}: K ?????"
             reference = candles[-2][4]
             last_close = candles[-1][4]
             current = ticker.get("last") or last_close
             if reference is None or reference == 0 or current is None:
-                return None, f"{market['symbol']} {timeframe}: 缺少价格"
+                return None, f"{market['symbol']} {timeframe}: ????"
             return {
                 "symbol": market["symbol"],
                 "instId": market["id"],
@@ -1193,7 +1310,8 @@ def rank_price_changes(payload: dict[str, Any]) -> dict[str, Any]:
             return None, f"{market['symbol']} {timeframe}: {exc}"
 
     results: list[dict[str, Any]] = []
-    errors: list[str] = []
+    errors: list[str] = ([f"?????????????? K ??????{ticker_error}"]
+                         if ticker_error else [])
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, max(1, len(markets)))) as executor:
         futures = [executor.submit(load_change, market) for market in markets]
         for future in as_completed(futures):
@@ -1253,11 +1371,11 @@ def screen(payload: dict[str, Any]) -> dict[str, Any]:
     started_at = time.perf_counter()
     display_timeframe = str(payload.get("timeframe", "1h"))
     if display_timeframe not in TIMEFRAMES:
-        raise ValueError("不支持的 K 线周期")
+        raise ValueError("???? K ???")
     quote = str(payload.get("quote", "USDT")).upper()
     user_conditions = payload.get("conditions") or []
     if not isinstance(user_conditions, list) or len(user_conditions) > 12:
-        raise ValueError("筛选条件最多 12 条")
+        raise ValueError("?????? 12 ?")
     validate_conditions(user_conditions)
     condition_groups = [expand_key_level_conditions([condition]) for condition in user_conditions]
     conditions = [condition for group in condition_groups for condition in group]
@@ -1630,8 +1748,8 @@ def chart_indicator_specs(conditions: list[dict[str, Any]], timeframe: str,
         key = (name, p, d)
         labels = {
             "ma": f"MA{p}", "ema": f"EMA{p}", "rsi": f"RSI{p}",
-            "bb_upper": f"BB{p} 上轨", "bb_middle": f"BB{p} 中轨",
-            "bb_lower": f"BB{p} 下轨", "bb_width": f"BB{p} 带宽",
+            "bb_upper": f"BB{p} ??", "bb_middle": f"BB{p} ??",
+            "bb_lower": f"BB{p} ??", "bb_width": f"BB{p} ??",
         }
         specs[key] = {"name": name, "period": p, "deviations": d,
                       "title": labels[name], "pane": "indicator" if name in {"rsi", "bb_width"} else "price"}
@@ -1706,18 +1824,18 @@ def chart_data(payload: dict[str, Any]) -> dict[str, Any]:
     timeframe = str(payload.get("timeframe", "1h"))
     mode = str(payload.get("mode", "close"))
     if timeframe not in TIMEFRAMES:
-        raise ValueError("不支持的图表周期")
+        raise ValueError("????????")
     if mode not in {"close", "live"}:
-        raise ValueError("不支持的图表模式")
+        raise ValueError("????????")
     conditions = payload.get("conditions") or []
     if not isinstance(conditions, list) or len(conditions) > 12:
-        raise ValueError("图表条件格式无效")
+        raise ValueError("????????")
     validate_conditions(conditions)
     chart_indicators = validate_chart_indicators(payload.get("chartIndicators"))
 
     market = next((item for item in fetch_markets() if item["id"] == inst_id), None)
     if not market:
-        raise ValueError("该合约当前未通过 Deepcoin 官网清单核验，无法加载图表")
+        raise ValueError("???????? Deepcoin ?????????????")
 
     matching_conditions = [condition for condition in conditions
                            if condition_timeframe(condition, timeframe) == timeframe]
@@ -1778,7 +1896,7 @@ def chart_data(payload: dict[str, Any]) -> dict[str, Any]:
         weekly_bars = weekly_future.result() if weekly_future else []
         recent_base = recent_base_future.result() if recent_base_future else []
     if not candles:
-        raise DeepcoinError(f"{market['symbol']} {timeframe} 暂无可用 K 线")
+        raise DeepcoinError(f"{market['symbol']} {timeframe} ???? K ?")
 
     ticker = tickers.get(inst_id, {})
     key_level_features_close: dict[str, float | None] = {}
@@ -1809,12 +1927,12 @@ def chart_data(payload: dict[str, Any]) -> dict[str, Any]:
             if events.get("supportHammer"):
                 event_markers.append({
                     "time": int(bar[0] // 1000), "position": "belowBar",
-                    "color": "#16866d", "shape": "arrowUp", "text": "锤",
+                    "color": "#16866d", "shape": "arrowUp", "text": "?",
                 })
             if events.get("resistanceInvertedHammer"):
                 event_markers.append({
                     "time": int(bar[0] // 1000), "position": "aboveBar",
-                    "color": "#c65e56", "shape": "arrowDown", "text": "长上影",
+                    "color": "#c65e56", "shape": "arrowDown", "text": "???",
                 })
             if events.get("retestConfirmed"):
                 support_retest = events.get("retestDirection") == 1
@@ -1921,7 +2039,7 @@ def chart_data(payload: dict[str, Any]) -> dict[str, Any]:
             continue
         name = str(condition.get("indicator", "price"))
         pane = "indicator" if name in {"rsi", "bb_width"} else "price"
-        thresholds.append({"value": threshold, "title": f"條件閾值 {format_value(threshold)}", "pane": pane})
+        thresholds.append({"value": threshold, "title": f"???? {format_value(threshold)}", "pane": pane})
 
     active_zones = []
     for zone in latest_zones:
@@ -1983,6 +2101,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/carousel/session":
+            token = (parse_qs(parsed.query).get("token") or [""])[0]
+            query = carousel_session_query(token)
+            if query is None:
+                self.send_json(404, {"error": "???????????????"})
+            else:
+                self.send_json(200, {"query": query})
+            return
         if parsed.path == "/api/displays":
             self.send_json(200, {"displays": carousel_displays()})
             return
@@ -1993,11 +2119,11 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 inst_id = (parse_qs(parsed.query).get("instId") or [""])[0]
                 if market_directory.health().get("status") != "ready":
-                    self.send_json(409, {"error": "官网合约清单正在重试核验，已暂停跳转，避免使用过期或错误入口。"})
+                    self.send_json(409, {"error": "???????????????????????????????"})
                     return
                 market = next((item for item in fetch_markets() if item["id"] == inst_id), None)
                 if not market:
-                    self.send_json(409, {"error": "该合约当前未通过官网交易清单核验，已阻止错误跳转。请刷新筛选结果并查看核验明细。"})
+                    self.send_json(409, {"error": "????????????????????????????????????????"})
                     return
                 self.send_response(302)
                 self.send_header("Location", "https://www.deepcoin.com/swap/zh/" + urlquote(market["webSymbol"], safe=""))
@@ -2111,7 +2237,7 @@ def main() -> None:
     port = int(__import__("os").environ.get("PORT", "8000"))
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     market_directory.start()
-    print(f"Deepcoin 筛选器已启动：http://127.0.0.1:{port}")
+    print(f"Deepcoin ???????http://127.0.0.1:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

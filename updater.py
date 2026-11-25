@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 import ctypes
+import socket
 from pathlib import Path
 
 
@@ -30,6 +31,9 @@ MAX_ARCHIVE_BYTES = 250 * 1024 * 1024
 MAX_UNPACKED_BYTES = 500 * 1024 * 1024
 MAX_ARCHIVE_FILES = 256
 MAX_CHECKSUM_BYTES = 64 * 1024
+UPDATE_REQUEST_ATTEMPTS = 2
+UPDATE_API_TIMEOUT = 4
+UPDATE_PAGE_TIMEOUT = 6
 LOCK_PREFIX = "deepcoin-screener-update"
 VERSION_PATTERN = re.compile(r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?$", re.I)
 UPDATE_LOG_PATH = Path(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()) / "DeepcoinScreen" / "update.log"
@@ -98,8 +102,18 @@ def _request_json(url: str) -> dict:
             "User-Agent": "deepcoin-contract-screener",
         },
     )
-    with urllib.request.urlopen(request, timeout=4) as response:
-        payload = response.read(2 * 1024 * 1024)
+    last_error = None
+    for attempt in range(UPDATE_REQUEST_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(request, timeout=UPDATE_API_TIMEOUT) as response:
+                payload = response.read(2 * 1024 * 1024)
+            break
+        except (urllib.error.URLError, TimeoutError, socket.timeout) as error:
+            last_error = error
+            if attempt + 1 < UPDATE_REQUEST_ATTEMPTS:
+                time.sleep(0.4 * (attempt + 1))
+                continue
+            raise
     value = json.loads(payload.decode("utf-8"))
     if not isinstance(value, dict):
         raise ValueError("invalid release response")
@@ -110,14 +124,14 @@ def _latest_release() -> dict:
     """Read the API first, then use GitHub's redirect when the API is rate-limited."""
     try:
         return _request_json(RELEASES_URL)
-    except urllib.error.HTTPError as error:
-        if error.code not in (403, 429):
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, socket.timeout) as error:
+        if isinstance(error, urllib.error.HTTPError) and error.code not in (403, 429):
             raise
     request = urllib.request.Request(
         RELEASE_PAGE_URL,
         headers={"User-Agent": "deepcoin-contract-screener"},
     )
-    with urllib.request.urlopen(request, timeout=8) as response:
+    with urllib.request.urlopen(request, timeout=UPDATE_PAGE_TIMEOUT) as response:
         final_url = response.geturl()
     match = re.search(r"/releases/tag/([^/?#]+)", urllib.parse.urlparse(final_url).path)
     if not match:
@@ -169,11 +183,18 @@ def _read_github_asset(url: str, maximum_bytes: int, timeout: int = 30) -> bytes
             "User-Agent": "deepcoin-contract-screener",
         },
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        content_length = response.headers.get("Content-Length")
-        if content_length and int(content_length) > maximum_bytes:
-            raise ValueError("release asset is too large")
-        content = response.read(maximum_bytes + 1)
+    for attempt in range(UPDATE_REQUEST_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                content_length = response.headers.get("Content-Length")
+                if content_length and int(content_length) > maximum_bytes:
+                    raise ValueError("release asset is too large")
+                content = response.read(maximum_bytes + 1)
+            break
+        except (urllib.error.URLError, TimeoutError, socket.timeout):
+            if attempt + 1 >= UPDATE_REQUEST_ATTEMPTS:
+                raise
+            time.sleep(0.5 * (attempt + 1))
     if len(content) > maximum_bytes:
         raise ValueError("release asset is too large")
     return content
@@ -221,26 +242,38 @@ def _download(url: str, destination: Path, expected_size: int | None, expected_d
             "User-Agent": "deepcoin-contract-screener",
         },
     )
-    digest = hashlib.sha256()
-    bytes_read = 0
-    with urllib.request.urlopen(request, timeout=60) as response, destination.open("wb") as output:
-        content_length = response.headers.get("Content-Length")
-        if content_length and int(content_length) > MAX_ARCHIVE_BYTES:
-            raise ValueError("release archive is too large")
-        while True:
-            chunk = response.read(1024 * 1024)
-            if not chunk:
-                break
-            bytes_read += len(chunk)
-            if bytes_read > MAX_ARCHIVE_BYTES:
-                raise ValueError("release archive is too large")
-            digest.update(chunk)
-            output.write(chunk)
-    if expected_size is not None and bytes_read != expected_size:
-        raise ValueError("release archive size mismatch")
     normalized = expected_digest.removeprefix("sha256:").lower()
-    if normalized != digest.hexdigest().lower():
-        raise ValueError("release archive hash mismatch")
+    last_error = None
+    for attempt in range(UPDATE_REQUEST_ATTEMPTS):
+        digest = hashlib.sha256()
+        bytes_read = 0
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response, destination.open("wb") as output:
+                content_length = response.headers.get("Content-Length")
+                if content_length and int(content_length) > MAX_ARCHIVE_BYTES:
+                    raise ValueError("release archive is too large")
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    bytes_read += len(chunk)
+                    if bytes_read > MAX_ARCHIVE_BYTES:
+                        raise ValueError("release archive is too large")
+                    digest.update(chunk)
+                    output.write(chunk)
+            if expected_size is not None and bytes_read != expected_size:
+                raise ValueError("release archive size mismatch")
+            if normalized != digest.hexdigest().lower():
+                raise ValueError("release archive hash mismatch")
+            return
+        except (urllib.error.URLError, TimeoutError, socket.timeout) as error:
+            last_error = error
+            if attempt + 1 < UPDATE_REQUEST_ATTEMPTS:
+                time.sleep(0.8 * (attempt + 1))
+                continue
+            raise
+    if last_error:
+        raise last_error
 
 
 def _safe_extract(archive: Path, destination: Path) -> None:
