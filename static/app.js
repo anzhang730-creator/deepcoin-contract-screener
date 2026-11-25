@@ -54,25 +54,25 @@ const keyLevelMetrics = new Set([
   "kl_previous_day_low", "kl_previous_week_high", "kl_previous_week_low", "kl_day_open", "kl_session_vwap",
 ]);
 const keyLevelSignalNames = new Map([
-  ["support_exists", "??????"], ["resistance_exists", "??????"],
-  ["high_quality_support", "?????"], ["high_quality_resistance", "?????"],
-  ["support_hammer_rejection", "???????"],
-  ["resistance_inverted_hammer_rejection", "????????"],
-  ["support_near", "??????"], ["resistance_near", "??????"],
-  ["support_touch", "??????"], ["resistance_touch", "??????"],
-  ["support_break", "??????"], ["resistance_break", "??????"],
-  ["support_retest", "??????"], ["resistance_retest", "??????"],
-  ["price_above_vwap", "?????? VWAP"], ["price_below_vwap", "?????? VWAP"],
-  ["price_above_previous_day_high", "????????"], ["price_below_previous_day_low", "????????"],
-  ["price_above_previous_week_high", "????????"], ["price_below_previous_week_low", "????????"],
-  ["price_above_day_open", "????????"], ["price_below_day_open", "????????"],
+  ["support_exists", "存在支撑区域"], ["resistance_exists", "存在压力区域"],
+  ["high_quality_support", "高质量支撑"], ["high_quality_resistance", "高质量压力"],
+  ["support_hammer_rejection", "支撑锤型线拒绝"],
+  ["resistance_inverted_hammer_rejection", "压力位长上影拒绝"],
+  ["support_near", "价格接近支撑"], ["resistance_near", "价格接近压力"],
+  ["support_touch", "收盘触碰支撑"], ["resistance_touch", "收盘触碰压力"],
+  ["support_break", "收盘跌破支撑"], ["resistance_break", "收盘突破压力"],
+  ["support_retest", "支撑回踩确认"], ["resistance_retest", "压力回踩确认"],
+  ["price_above_vwap", "价格高于会话 VWAP"], ["price_below_vwap", "价格低于会话 VWAP"],
+  ["price_above_previous_day_high", "价格高于前日高点"], ["price_below_previous_day_low", "价格低于前日低点"],
+  ["price_above_previous_week_high", "价格高于前周高点"], ["price_below_previous_week_low", "价格低于前周低点"],
+  ["price_above_day_open", "价格高于当日开盘"], ["price_below_day_open", "价格低于当日开盘"],
 ]);
 
 function renderAuditEntries() {
   const query = $("#marketAuditSearch").value.trim().toUpperCase();
   const body = $("#marketAuditRows");
   body.replaceChildren();
-  const states = { pending: "???", not_listed: "?????", inactive: "????" };
+  const states = { pending: "待核验", not_listed: "官网未列出", inactive: "非交易中" };
   for (const item of currentAudit?.entries || []) {
     if (query && !item.symbol.toUpperCase().includes(query)) continue;
     const row = document.createElement("tr");
@@ -88,18 +88,18 @@ function renderAuditEntries() {
 function renderAudit(data) {
   currentAudit = data;
   const failed = data.status === "error" || data.stale;
-  const checked = data.checkedAt ? new Date(data.checkedAt).toLocaleTimeString("zh-CN") : "??????";
+  const checked = data.checkedAt ? new Date(data.checkedAt).toLocaleTimeString("zh-CN") : "尚无成功记录";
   $(".market-audit").classList.toggle("has-error", failed);
   $("#marketAuditStatus").textContent = failed
-    ? `??${data.status === "error" ? "???15 ??????" : "???"} ? ???? ${checked} ? ??????`
-    : `??? ${data.availableMarkets || 0} ? ? ????? ${data.excludedMarkets || 0} ? ? ??? ${data.pendingMarkets || 0} ? ? ${checked}${data.refreshing ? " ? ????" : ""}`;
+    ? `核验${data.status === "error" ? "失败，15 秒后自动重试" : "更新中"} · 上次成功 ${checked} · 官网核验异常`
+    : `已确认 ${data.availableMarkets || 0} 个 · 官网未列出 ${data.excludedMarkets || 0} 个 · 待核验 ${data.pendingMarkets || 0} 个 · ${checked}${data.refreshing ? " · 正在更新" : ""}`;
   if (failed && data.verifiedSymbols?.length) {
-    $("#marketAuditStatus").textContent += " ? ???????????????????";
+    $("#marketAuditStatus").textContent += " · 使用上次确认目录继续筛选，直达暂不可用";
   }
-  $("#marketAuditSummary").textContent = `?????????${data.pendingMarkets ? `?${data.pendingMarkets} ?????` : ""}`;
-  $("#marketAuditHint").textContent = data.errors?.length ? data.errors.join("?") : "??? 60 ?????????????? 15 ????????????????????????????";
+  $("#marketAuditSummary").textContent = `核验明细与最近变更${data.pendingMarkets ? `（${data.pendingMarkets} 个待核验）` : ""}`;
+  $("#marketAuditHint").textContent = data.errors?.length ? data.errors.join("；") : "后台每 60 秒核对；异常或清单不同步时每 15 秒重试。官网未列出不等同永久下架，后续确认后会自动恢复。";
   const change = data.changes?.at(-1);
-  $("#marketAuditChanges").textContent = change ? (change.initial ? `????????? ${change.added.length} ????` : `??????????? ${change.added.length} ?${change.added.length ? `?${change.added.slice(0, 8).join("?")}?` : ""}??????? ${change.removed.length} ?${change.removed.length ? `?${change.removed.slice(0, 8).join("?")}?` : ""}?`) : "???????";
+  $("#marketAuditChanges").textContent = change ? (change.initial ? `本次启动初始化确认 ${change.added.length} 个合约。` : `最近范围变更：新增确认 ${change.added.length} 个${change.added.length ? `（${change.added.slice(0, 8).join("、")}）` : ""}；移出确认范围 ${change.removed.length} 个${change.removed.length ? `（${change.removed.slice(0, 8).join("、")}）` : ""}。`) : "等待首次核验。";
   renderAuditEntries();
 }
 
@@ -109,13 +109,13 @@ async function loadMarketAudit(force = false) {
     if (force) {
       auditForceQueued = true;
       button.disabled = true;
-      button.textContent = "?????";
+      button.textContent = "核验排队中";
     }
     return;
   }
   auditBusy = true;
   button.disabled = true;
-  if (force) button.textContent = "????";
+  if (force) button.textContent = "核验中…";
   try {
     const data = await requestJson("/api/market-audit", { method: force ? "POST" : "GET" }, {
       timeoutMs: force ? 90000 : 15000,
@@ -125,8 +125,8 @@ async function loadMarketAudit(force = false) {
     if (lastData) renderResults(lastData, activeMode);
     if (lastRankingData) renderRanking(lastRankingData);
   } catch {
-    if (currentAudit) renderAudit({ ...currentAudit, status: "error", stale: true, errors: ["?????????????????????"] });
-    $("#marketAuditStatus").textContent = "????????????????";
+    if (currentAudit) renderAudit({ ...currentAudit, status: "error", stale: true, errors: ["无法获取本地核验状态，请确认服务仍在运行。"] });
+    $("#marketAuditStatus").textContent = "无法获取核验状态，请检查本地服务";
     if (lastData) renderResults(lastData, activeMode);
     if (lastRankingData) renderRanking(lastRankingData);
   } finally {
@@ -134,7 +134,7 @@ async function loadMarketAudit(force = false) {
     const runQueuedRefresh = auditForceQueued;
     auditForceQueued = false;
     button.disabled = runQueuedRefresh;
-    button.textContent = runQueuedRefresh ? "?????" : "????";
+    button.textContent = runQueuedRefresh ? "核验排队中" : "立即核验";
     if (runQueuedRefresh) void loadMarketAudit(true);
   }
 }
@@ -194,11 +194,11 @@ function updateCarouselHint() {
   if (!hint) return;
   const selection = carouselSelection();
   if (!selection.results.length) {
-    hint.textContent = selection.source === "ranking" ? "????????" : "???????";
+    hint.textContent = selection.source === "ranking" ? "先更新涨跌幅排序" : "先完成一次筛选";
     return;
   }
-  const label = selection.source === "ranking" ? `${selection.timeframe} ??` : (selection.mode === "live" ? "????" : "????");
-  hint.textContent = `${selection.results.length} ?${label}?????`;
+  const label = selection.source === "ranking" ? `${selection.timeframe} 排序` : (selection.mode === "live" ? "实时筛选" : "收盘筛选");
+  hint.textContent = `${selection.results.length} 个${label}结果可轮播`;
 }
 
 function addCondition(defaults = {}) {
@@ -236,8 +236,8 @@ function setupCollapsiblePanels() {
       body.classList.toggle("hidden", open);
       panel.classList.toggle("is-open", !open);
       const state = $(".collapse-state", header);
-      state.childNodes[0].textContent = open ? "?? " : "?? ";
-      $(".collapse-chevron", header).textContent = open ? "?" : "?";
+      state.childNodes[0].textContent = open ? "展开 " : "收起 ";
+      $(".collapse-chevron", header).textContent = open ? "⌄" : "⌃";
       localStorage.setItem(`deepcoin-panel-${panel.dataset.panel}`, open ? "closed" : "open");
     });
     const panel = header.closest(".collapsible-panel");
@@ -300,19 +300,19 @@ function updateConditionRow(event, explicitRow) {
     threshold.min = "0";
     threshold.max = signal.endsWith("_near") ? "10" : "100";
     $(".key-level-threshold-label", row).textContent = signal.endsWith("_near")
-      ? "???? (ATR)" : signal === "support_hammer_rejection" ? "????????"
-        : signal === "resistance_inverted_hammer_rejection" ? "????????" : "?????";
+      ? "最大距离 (ATR)" : signal === "support_hammer_rejection" ? "事件支撑质量下限"
+        : signal === "resistance_inverted_hammer_rejection" ? "事件压力质量下限" : "质量分下限";
     for (const selector of [".left-period-field", ".condition-operator", ".condition-value-type", ".numeric-value-field", ".boolean-value-field", ".right-indicator-field", ".right-period-field"]) {
       $(selector, row).closest(".condition-field")?.classList.add("hidden");
     }
     const thresholdSummary = !needsThreshold ? ""
-      : signal.endsWith("_near") ? `????? ${threshold.value || "???"} ATR`
-        : signal === "support_hammer_rejection" ? `??????? ? ${threshold.value || "???"}`
-          : signal === "resistance_inverted_hammer_rejection" ? `??????? ? ${threshold.value || "???"}`
-          : `???? ? ${threshold.value || "???"}`;
+      : signal.endsWith("_near") ? `，最大距离 ${threshold.value || "未填写"} ATR`
+        : signal === "support_hammer_rejection" ? `，事件支撑质量 ≥ ${threshold.value || "未填写"}`
+          : signal === "resistance_inverted_hammer_rejection" ? `，事件压力质量 ≥ ${threshold.value || "未填写"}`
+          : `，质量分 ≥ ${threshold.value || "未填写"}`;
     const lookbackSummary = isRejectionPattern
-      ? `????? ${$(".condition-key-level-lookback", row).value} ???? K ?` : "";
-    $(".condition-summary", row).textContent = `?????????? ? ${keyLevelSignalNames.get(signal) || signal}${thresholdSummary}${lookbackSummary}`;
+      ? `，回看最近 ${$(".condition-key-level-lookback", row).value} 根已收盘 K 线` : "";
+    $(".condition-summary", row).textContent = `实际条件：关键位指标 · ${keyLevelSignalNames.get(signal) || signal}${thresholdSummary}${lookbackSummary}`;
     return;
   }
   for (const selector of [".condition-operator", ".condition-value-type", ".numeric-value-field", ".boolean-value-field", ".right-indicator-field", ".right-period-field"]) {
@@ -320,45 +320,45 @@ function updateConditionRow(event, explicitRow) {
   }
   $(".left-period-field", row).classList.toggle("hidden", ["price", "change24h", "volume24h"].includes(indicator) || keyLevelMetrics.has(indicator));
   $(".numeric-value-field", row).classList.toggle("hidden", type !== "number" && !isProximity);
-  $(".numeric-value-field", row).childNodes[0].textContent = isProximity ? "???? (%)" : "??";
+  $(".numeric-value-field", row).childNodes[0].textContent = isProximity ? "距离范围 (%)" : "数值";
   const valueInput = $(".condition-value", row);
   if (isProximity) {
     valueInput.min = "0";
     valueInput.max = "100";
-    valueInput.placeholder = "?? 0.5";
+    valueInput.placeholder = "例如 0.5";
   } else {
     valueInput.removeAttribute("min");
     valueInput.removeAttribute("max");
-    valueInput.placeholder = "?? 50";
+    valueInput.placeholder = "例如 50";
   }
   $(".boolean-value-field", row).classList.toggle("hidden", type !== "boolean");
   $(".right-indicator-field", row).classList.toggle("hidden", type !== "indicator");
   $(".right-period-field", row).classList.toggle("hidden", type !== "indicator");
   const names = {
-    price: "???", change24h: "24h???", volume24h: "24h???", ma: "MA", ema: "EMA", rsi: "RSI",
-    bb_upper: "????", bb_middle: "????", bb_lower: "????", bb_width: "????",
-    kl_support_exists: "??????", kl_support_top: "????", kl_support_bottom: "????",
-    kl_support_score: "?????", kl_support_touches: "??????", kl_support_confluence: "??????",
-    kl_support_htf: "???????", kl_support_retest_pending: "??????", kl_support_distance_atr: "??? ATR",
-    kl_resistance_exists: "??????", kl_resistance_top: "????", kl_resistance_bottom: "????",
-    kl_resistance_score: "?????", kl_resistance_touches: "??????", kl_resistance_confluence: "??????",
-    kl_resistance_htf: "???????", kl_resistance_retest_pending: "??????", kl_resistance_distance_atr: "??? ATR",
-    kl_event_support_touch: "??????", kl_event_support_hammer: "????????", kl_event_resistance_touch: "??????",
-    kl_event_support_break: "??????", kl_event_resistance_break: "??????",
-    kl_event_support_retest: "????????", kl_event_resistance_retest: "????????",
-    kl_previous_day_high: "?????", kl_previous_day_low: "?????",
-    kl_previous_week_high: "?????", kl_previous_week_low: "?????",
-    kl_day_open: "?????", kl_session_vwap: "?? VWAP",
+    price: "最新价", change24h: "24h涨跌幅", volume24h: "24h成交额", ma: "MA", ema: "EMA", rsi: "RSI",
+    bb_upper: "布林上轨", bb_middle: "布林中轨", bb_lower: "布林下轨", bb_width: "布林带宽",
+    kl_support_exists: "存在支撑区域", kl_support_top: "支撑上沿", kl_support_bottom: "支撑下沿",
+    kl_support_score: "支撑质量分", kl_support_touches: "支撑触碰次数", kl_support_confluence: "支撑合并次数",
+    kl_support_htf: "支撑高周期共振", kl_support_retest_pending: "支撑等待回踩", kl_support_distance_atr: "距支撑 ATR",
+    kl_resistance_exists: "存在压力区域", kl_resistance_top: "压力上沿", kl_resistance_bottom: "压力下沿",
+    kl_resistance_score: "压力质量分", kl_resistance_touches: "压力触碰次数", kl_resistance_confluence: "压力合并次数",
+    kl_resistance_htf: "压力高周期共振", kl_resistance_retest_pending: "压力等待回踩", kl_resistance_distance_atr: "距压力 ATR",
+    kl_event_support_touch: "收盘触碰支撑", kl_event_support_hammer: "支撑锤型拒绝事件", kl_event_resistance_touch: "收盘触碰压力",
+    kl_event_support_break: "收盘跌破支撑", kl_event_resistance_break: "收盘突破压力",
+    kl_event_support_retest: "收盘确认支撑回踩", kl_event_resistance_retest: "收盘确认压力回踩",
+    kl_previous_day_high: "前一日高点", kl_previous_day_low: "前一日低点",
+    kl_previous_week_high: "前一周高点", kl_previous_week_low: "前一周低点",
+    kl_day_open: "当日开盘价", kl_session_vwap: "会话 VWAP",
   };
-  const operators = { ">": ">", ">=": "?", "<": "<", "<=": "?", "=": "=", "!=": "?" };
+  const operators = { ">": ">", ">=": "≥", "<": "<", "<=": "≤", "=": "=", "!=": "≠" };
   const noPeriod = ["price", "change24h", "volume24h"].includes(indicator) || keyLevelMetrics.has(indicator);
   const left = `${names[indicator] || indicator}${noPeriod ? "" : $(".condition-period", row).value}`;
   let right = type === "indicator"
     ? `${names[$(".condition-value-indicator", row).value] || $(".condition-value-indicator", row).value}${keyLevelMetrics.has($(".condition-value-indicator", row).value) ? "" : $(".condition-value-period", row).value}`
     : type === "boolean" ? $(".condition-boolean-value", row).selectedOptions[0].textContent : $(".condition-value", row).value;
   $(".condition-summary", row).textContent = isProximity
-    ? `?????${left} ?? ${right || "?????"} ??? ${valueInput.value || "???"}%`
-    : `?????${left} ${operators[operator.value] || operator.value} ${right || "???"}`;
+    ? `实际条件：${left} 距离 ${right || "未选择指标"} 不超过 ${valueInput.value || "未填写"}%`
+    : `实际条件：${left} ${operators[operator.value] || operator.value} ${right || "未填写"}`;
 }
 
 function renumber() {
@@ -390,52 +390,52 @@ function validateClientConditions(conditionList) {
     if (condition.operator === "within_percent") {
       if (condition.indicator !== "price" || condition.valueType !== "indicator"
           || !["ma", "ema", "bb_upper", "bb_middle", "bb_lower"].includes(condition.valueIndicator)) {
-        return `? ${index + 1} ????????????????????`;
+        return `第 ${index + 1} 条距离条件需要选择最新价和价格尺度指标。`;
       }
       if (!condition.valueText || !Number.isFinite(condition.value) || condition.value < 0 || condition.value > 100) {
-        return `? ${index + 1} ????????? 0 ? 100% ???`;
+        return `第 ${index + 1} 条指标距离范围应在 0 到 100% 之间。`;
       }
       continue;
     }
     if (condition.indicator === "key_levels") {
-      if (!keyLevelSignalNames.has(condition.keyLevelSignal)) return `? ${index + 1} ??????????????`;
+      if (!keyLevelSignalNames.has(condition.keyLevelSignal)) return `第 ${index + 1} 条条件请选择关键位指标信号。`;
       if ((condition.keyLevelSignal.startsWith("high_quality_") || condition.keyLevelSignal.endsWith("_near")
           || ["support_hammer_rejection", "resistance_inverted_hammer_rejection"].includes(condition.keyLevelSignal))
           && (!condition.keyLevelThresholdText || !Number.isFinite(condition.keyLevelThreshold)
             || condition.keyLevelThreshold < 0 || condition.keyLevelThreshold > (condition.keyLevelSignal.endsWith("_near") ? 10 : 100))) {
-        return `? ${index + 1} ???????????`;
+        return `第 ${index + 1} 条关键位阈值超出范围。`;
       }
       if (["support_hammer_rejection", "resistance_inverted_hammer_rejection"].includes(condition.keyLevelSignal)
           && (!Number.isInteger(condition.keyLevelLookbackBars)
             || condition.keyLevelLookbackBars < 1 || condition.keyLevelLookbackBars > 100)) {
-        return `? ${index + 1} ??K???????? 1 ? 100 ????`;
+        return `第 ${index + 1} 条裸K形态回看根数应为 1 到 100 的整数。`;
       }
       continue;
     }
     if (keyLevelBooleanMetrics.has(condition.indicator)) {
-      if (condition.valueType !== "boolean" || !["=", "!="].includes(condition.operator)) return `? ${index + 1} ??????????????????????????`;
+      if (condition.valueType !== "boolean" || !["=", "!="].includes(condition.operator)) return `第 ${index + 1} 条关键位状态条件需要使用“状态”并选择等于或不等于。`;
       continue;
     }
-    if (condition.valueType === "boolean") return `? ${index + 1} ????????????????`;
+    if (condition.valueType === "boolean") return `第 ${index + 1} 条条件需要先选择关键位状态指标。`;
     if (condition.valueType !== "indicator") continue;
     if (condition.indicator !== condition.valueIndicator || (!keyLevelMetrics.has(condition.indicator) && condition.period !== condition.valuePeriod)) continue;
     if ([">", "<", "!=", "=", ">=", "<="].includes(condition.operator)) {
-      const names = { price: "???", ma: "MA", ema: "EMA", rsi: "RSI", bb_upper: "????", bb_middle: "????", bb_lower: "????", ...Object.fromEntries([...keyLevelMetrics].map(metric => [metric, metric])) };
+      const names = { price: "最新价", ma: "MA", ema: "EMA", rsi: "RSI", bb_upper: "布林上轨", bb_middle: "布林中轨", bb_lower: "布林下轨", ...Object.fromEntries([...keyLevelMetrics].map(metric => [metric, metric])) };
       const label = `${names[condition.indicator] || condition.indicator}(${condition.period})`;
-      if ([">", "<", "!="].includes(condition.operator)) return `? ${index + 1} ??????${label} ??????????????????????`;
-      return `? ${index + 1} ???????${label} ???????????????`;
+      if ([">", "<", "!="].includes(condition.operator)) return `第 ${index + 1} 条条件无效：${label} 与自身比较永远不会命中，请修改右侧指标周期。`;
+      return `第 ${index + 1} 条条件恒为真：${label} 与自身相同，可以删除这条条件。`;
     }
   }
   return "";
 }
 
 function formatNumber(value, digits = 4) {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) return "?";
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
   return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: digits }).format(Number(value));
 }
 
 function formatVolume(value) {
-  if (value === null || value === undefined) return "?";
+  if (value === null || value === undefined) return "—";
   const n = Number(value);
   if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
   if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
@@ -450,26 +450,26 @@ function escapeHtml(value) {
 }
 
 function renderChartButton(item, timeframe, source) {
-  return `<button class="chart-open-button" type="button" data-inst-id="${escapeHtml(item.instId)}" data-symbol="${escapeHtml(item.symbol)}" data-chart-timeframe="${escapeHtml(timeframe || "1h")}" data-chart-source="${source}" title="?? ${escapeHtml(item.symbol)} ?? K ??????">??</button>`;
+  return `<button class="chart-open-button" type="button" data-inst-id="${escapeHtml(item.instId)}" data-symbol="${escapeHtml(item.symbol)}" data-chart-timeframe="${escapeHtml(timeframe || "1h")}" data-chart-source="${source}" title="查看 ${escapeHtml(item.symbol)} 本地 K 线与筛选指标">图表</button>`;
 }
 
 function renderKeyLevelSummary(levels) {
   const entries = Object.entries(levels || {});
-  if (!entries.length) return "?";
+  if (!entries.length) return "—";
   return `<div class="key-level-cell">${entries.map(([timeframe, values]) => {
     const support = Number(values.kl_support_exists) === 1
-      ? `${formatNumber(values.kl_support_bottom, 8)} - ${formatNumber(values.kl_support_top, 8)} ? ${formatNumber(values.kl_support_score, 0)}`
-      : "?";
+      ? `${formatNumber(values.kl_support_bottom, 8)} - ${formatNumber(values.kl_support_top, 8)} · ${formatNumber(values.kl_support_score, 0)}`
+      : "—";
     const resistance = Number(values.kl_resistance_exists) === 1
-      ? `${formatNumber(values.kl_resistance_bottom, 8)} - ${formatNumber(values.kl_resistance_top, 8)} ? ${formatNumber(values.kl_resistance_score, 0)}`
-      : "?";
+      ? `${formatNumber(values.kl_resistance_bottom, 8)} - ${formatNumber(values.kl_resistance_top, 8)} · ${formatNumber(values.kl_resistance_score, 0)}`
+      : "—";
     const refs = [
-      ["??", values.kl_previous_day_high], ["??", values.kl_previous_day_low],
-      ["??", values.kl_previous_week_high], ["??", values.kl_previous_week_low],
-      ["?", values.kl_day_open], ["VWAP", values.kl_session_vwap],
+      ["昨高", values.kl_previous_day_high], ["昨低", values.kl_previous_day_low],
+      ["周高", values.kl_previous_week_high], ["周低", values.kl_previous_week_low],
+      ["开", values.kl_day_open], ["VWAP", values.kl_session_vwap],
     ].filter(([, value]) => value !== null && value !== undefined)
       .map(([label, value]) => `${label} ${formatNumber(value, 8)}`);
-    return `<span><b>${timeframe}</b> ? ${support} / ? ${resistance}${refs.length ? `<small>${refs.join(" ? ")}</small>` : ""}</span>`;
+    return `<span><b>${timeframe}</b> 支 ${support} / 压 ${resistance}${refs.length ? `<small>${refs.join(" · ")}</small>` : ""}</span>`;
   }).join("")}</div>`;
 }
 
@@ -485,18 +485,18 @@ function renderTradeLink(item) {
     wrapper.appendChild(name);
     const note = document.createElement("span");
     note.className = "trade-link-note";
-    note.textContent = auditUnavailable ? "???????" : item.webCatalogStatus === "unavailable" ? "????????" : "???????";
+    note.textContent = auditUnavailable ? "官网清单更新中" : item.webCatalogStatus === "unavailable" ? "官网清单核验失败" : "官网直达未确认";
     note.title = auditUnavailable
-      ? "???????????????????????????????"
-      : item.webTradeReason || "??????????????????? BTCUSDT????????????????";
+      ? "保留最近一次已确认的筛选结果；官网清单核验完成前暂不开放直达。"
+      : item.webTradeReason || "暂未确认官网入口，已暂停跳转，避免误入 BTCUSDT。请重新筛选以获取最新入口状态。";
     note.tabIndex = 0;
     wrapper.appendChild(note);
     const copy = document.createElement("button");
     copy.type = "button";
     copy.className = "copy-trade-symbol";
     copy.dataset.symbol = symbol;
-    copy.textContent = "????";
-    copy.title = `?? ${symbol}?? Deepcoin ??????`;
+    copy.textContent = "复制名称";
+    copy.title = `复制 ${symbol}，到 Deepcoin 官网搜索核对`;
     wrapper.appendChild(copy);
     return wrapper.outerHTML;
   }
@@ -506,14 +506,14 @@ function renderTradeLink(item) {
   link.dataset.tradeUrl = item.tradeUrl;
   link.target = "_blank";
   link.rel = "noopener noreferrer";
-  link.title = `??????? ${symbol} ? Deepcoin ????`;
-  link.setAttribute("aria-label", `${symbol}???????? Deepcoin ????`);
+  link.title = `在新标签页打开 ${symbol} 的 Deepcoin 合约页面`;
+  link.setAttribute("aria-label", `${symbol}，在新标签页打开 Deepcoin 合约页面`);
   const name = document.createElement("strong");
   name.textContent = symbol;
   const icon = document.createElement("span");
   icon.className = "trade-link-icon";
   icon.setAttribute("aria-hidden", "true");
-  icon.textContent = "?";
+  icon.textContent = "↗";
   name.appendChild(icon);
   link.appendChild(name);
   return link.outerHTML;
@@ -525,10 +525,10 @@ document.addEventListener("click", async event => {
   const symbol = button.dataset.symbol;
   try {
     await navigator.clipboard.writeText(symbol);
-    button.textContent = "???";
-    setTimeout(() => { button.textContent = "????"; }, 1800);
+    button.textContent = "已复制";
+    setTimeout(() => { button.textContent = "复制名称"; }, 1800);
   } catch {
-    window.prompt("?????????? Deepcoin ???????", symbol);
+    window.prompt("请复制交易对名称，到 Deepcoin 官网搜索核对：", symbol);
   }
 });
 
@@ -545,27 +545,27 @@ function renderRanking(data) {
     else rankCarouselButton.removeAttribute("aria-busy");
   }
   updateCarouselHint();
-  const directionLabel = data.direction === "asc" ? "??" : "??";
+  const directionLabel = data.direction === "asc" ? "跌幅" : "涨幅";
   const catalog = data.websiteCatalog || {};
-  $("#rankMeta").textContent = `?? ${data.scanned}/${data.totalMarkets} ?????${catalog.excludedMarkets ? ` ? ?????? ${catalog.excludedMarkets}` : ""} ? ${data.timeframe} ? ${data.durationMs || 0}ms ??`;
+  $("#rankMeta").textContent = `扫描 ${data.scanned}/${data.totalMarkets} 个官网合约${catalog.excludedMarkets ? ` · 官网清单排除 ${catalog.excludedMarkets}` : ""} · ${data.timeframe} · ${data.durationMs || 0}ms 更新`;
   if (catalog.errors?.length) {
-    $("#message").textContent = `????????????????????????${catalog.errors.join("?")}`;
+    $("#message").textContent = `官网清单核验失败，已保留核验记录并暂停更新结果：${catalog.errors.join("；")}`;
     $("#message").classList.remove("hidden");
   }
   if (data.errors?.length) {
-    $("#message").textContent = `????????????${data.errors.join("?")}`;
+    $("#message").textContent = `部分涨跌幅数据获取失败：${data.errors.join("；")}`;
     $("#message").classList.remove("hidden");
   }
   if (!items.length) {
     const waiting = currentAudit && (currentAudit.stale || currentAudit.status !== "ready");
-    body.innerHTML = `<tr class="empty-row"><td colspan="7"><div class="empty-state"><div class="empty-mark">?</div><strong>${waiting ? "????????" : "??????????"}</strong><span>${waiting ? "?????????????????" : `?? ${data.failed || 0} ????`}</span></div></td></tr>`;
+    body.innerHTML = `<tr class="empty-row"><td colspan="7"><div class="empty-state"><div class="empty-mark">∅</div><strong>${waiting ? "等待官网清单核验" : "没有可排序的行情数据"}</strong><span>${waiting ? "上次核验记录已保留，确认后恢复结果" : `失败 ${data.failed || 0} 个交易对`}</span></div></td></tr>`;
     return;
   }
   body.innerHTML = items.map((original, index) => {
     const item = { ...original, rank: index + 1 };
     const changeClass = item.changePercent >= 0 ? "positive" : "negative";
     const closeClass = item.closeChangePercent >= 0 ? "positive" : "negative";
-    return `<tr><td class="rank-number">${item.rank}</td><td><div class="pair-actions">${renderTradeLink(item)}${renderChartButton(item, data.timeframe, "ranking")}</div><span class="pair-sub">${item.quote} ??</span></td><td class="mono">${formatNumber(item.price, 8)}</td><td class="mono">${formatNumber(item.periodStartPrice, 8)}</td><td class="mono ${changeClass}">${item.changePercent >= 0 ? "+" : ""}${formatNumber(item.changePercent, 2)}%</td><td class="mono ${closeClass}">${item.closeChangePercent >= 0 ? "+" : ""}${formatNumber(item.closeChangePercent, 2)}%</td><td class="mono">${formatVolume(item.volume24h)}</td></tr>`;
+    return `<tr><td class="rank-number">${item.rank}</td><td><div class="pair-actions">${renderTradeLink(item)}${renderChartButton(item, data.timeframe, "ranking")}</div><span class="pair-sub">${item.quote} 永续</span></td><td class="mono">${formatNumber(item.price, 8)}</td><td class="mono">${formatNumber(item.periodStartPrice, 8)}</td><td class="mono ${changeClass}">${item.changePercent >= 0 ? "+" : ""}${formatNumber(item.changePercent, 2)}%</td><td class="mono ${closeClass}">${item.closeChangePercent >= 0 ? "+" : ""}${formatNumber(item.closeChangePercent, 2)}%</td><td class="mono">${formatVolume(item.volume24h)}</td></tr>`;
   }).join("");
 }
 
@@ -575,15 +575,15 @@ function scheduleRankingRefresh() {
   rankingNextRefreshAt = 0;
   const seconds = Number($("#rankingRefreshSeconds").value) || 0;
   if (!seconds) {
-    $("#rankAutoStatus").textContent = lastRankingData ? "???????" : "?????? 60 ?????";
+    $("#rankAutoStatus").textContent = lastRankingData ? "自动重排已关闭" : "更新排序后按 60 秒自动重排";
     return;
   }
   if (!lastRankingData) {
-    $("#rankAutoStatus").textContent = `????????? ${seconds} ?????`;
+    $("#rankAutoStatus").textContent = `首次更新排序后，每 ${seconds} 秒自动重排`;
     return;
   }
   rankingNextRefreshAt = Date.now() + seconds * 1000;
-  $("#rankAutoStatus").textContent = `? ${seconds} ???????? ${new Date(rankingNextRefreshAt).toLocaleTimeString("zh-CN")}`;
+  $("#rankAutoStatus").textContent = `每 ${seconds} 秒自动重排，下次 ${new Date(rankingNextRefreshAt).toLocaleTimeString("zh-CN")}`;
   rankingRefreshTimer = setTimeout(() => runRanking({ automatic: true }), seconds * 1000);
 }
 
@@ -594,10 +594,10 @@ async function runRanking({ automatic = false } = {}) {
   rankingRefreshTimer = null;
   rankingNextRefreshAt = 0;
   rankingBusy = true;
-  if (automatic) $("#rankAutoStatus").textContent = "?????????????";
+  if (automatic) $("#rankAutoStatus").textContent = "自动重排中，保留上一批结果";
   button.disabled = true;
   button.setAttribute("aria-busy", "true");
-  button.textContent = "???";
+  button.textContent = "排序中";
   try {
     const requestPayload = {
       quote: $("#quote").value,
@@ -612,25 +612,25 @@ async function runRanking({ automatic = false } = {}) {
     });
     const response = await requestWithRetry(`/api/price-change?${query.toString()}`, {}, { timeoutMs: 180000, retries: 1 });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "???????");
+    if (!response.ok) throw new Error(data.error || "涨跌幅排序失败");
     $("#message").classList.add("hidden");
     lastRankingData = data;
     lastRankingPayload = requestPayload;
     await loadMarketAudit();
     renderRanking(data);
     if (data.unavailableSymbols?.length) {
-      $("#message").textContent = `${data.unavailableSymbols.join("?")} ????????????????????????????????????????`;
+      $("#message").textContent = `${data.unavailableSymbols.join("、")} 未通过当前官网交易清单核验，请展开“核验明细”查看原因；未将它们当作条件不匹配。`;
       $("#message").classList.remove("hidden");
     }
   } catch (error) {
-    $("#message").textContent = error.name === "TypeError" ? "?????????????????" : error.message;
+    $("#message").textContent = error.name === "TypeError" ? "无法连接本地筛选服务，请刷新页面。" : error.message;
     $("#message").classList.remove("hidden");
   } finally {
     rankingBusy = false;
     scheduleRankingRefresh();
     button.disabled = false;
     button.removeAttribute("aria-busy");
-    button.textContent = "????";
+    button.textContent = "更新排序";
   }
 }
 
@@ -639,18 +639,18 @@ function renderResults(data, mode = activeMode) {
   updateCarouselHint();
   renderScreeningDiagnostics(data, mode);
   $("#resultCount").textContent = results.length;
-  $("#priceHeader").textContent = mode === "live" ? "???" : "???";
-  const failedText = data.failedCandles ? ` ? ${data.failedCandles} ? K ???` : "";
-  const performanceText = data.durationMs ? ` ? ${data.durationMs}ms` : "";
+  $("#priceHeader").textContent = mode === "live" ? "实时价" : "收盘价";
+  const failedText = data.failedCandles ? ` · ${data.failedCandles} 组 K 线失败` : "";
+  const performanceText = data.durationMs ? ` · ${data.durationMs}ms` : "";
   const catalog = data.websiteCatalog || {};
-  const catalogText = catalog.excludedMarkets ? ` ? ?????? ${catalog.excludedMarkets}` : "";
-  $("#scanMeta").textContent = `?? ${data.scanned}/${data.totalMarkets} ????? ? ?? ${data.timeframes?.join(" / ") || data.timeframe}${catalogText}${failedText}${performanceText} ? ${new Date(data.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} ??`;
+  const catalogText = catalog.excludedMarkets ? ` · 官网清单排除 ${catalog.excludedMarkets}` : "";
+  $("#scanMeta").textContent = `扫描 ${data.scanned}/${data.totalMarkets} 个官网合约 · 周期 ${data.timeframes?.join(" / ") || data.timeframe}${catalogText}${failedText}${performanceText} · ${new Date(data.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 更新`;
   if (catalog.errors?.length) {
-    $("#message").textContent = `????????????????????????${catalog.errors.join("?")}`;
+    $("#message").textContent = `官网清单核验失败，已保留核验记录并暂停更新结果：${catalog.errors.join("；")}`;
     $("#message").classList.remove("hidden");
   }
   if (data.candleErrors?.length) {
-    $("#message").textContent = `?? K ??????${data.candleErrors.join("?")}`;
+    $("#message").textContent = `部分 K 线获取失败：${data.candleErrors.join("；")}`;
     $("#message").classList.remove("hidden");
   }
   const body = $("#resultsBody");
@@ -658,25 +658,25 @@ function renderResults(data, mode = activeMode) {
     const waiting = currentAudit && (currentAudit.stale || currentAudit.status !== "ready");
     const diagnostic = data.screeningDiagnostics;
     const modeDiagnostic = diagnostic?.[mode];
-    let hint = waiting ? "?????????????????" : data.unavailableSymbols?.length ? "?????????????????????" : "??????????????";
+    let hint = waiting ? "上次核验记录已保留，确认后恢复结果" : data.unavailableSymbols?.length ? "指定合约未通过官网核验，请展开顶部核验明细" : "可以放宽阈值，或增加扫描数量";
     if (!waiting && !data.unavailableSymbols?.length && diagnostic) {
       if (diagnostic.selectedMarkets > 0 && diagnostic.candleCandidates === 0) {
-        hint = `${diagnostic.selectedMarkets} ???????? 24h ????????`;
+        hint = `${diagnostic.selectedMarkets} 个扫描对象全部被 24h 行情条件预筛排除`;
       } else if (modeDiagnostic?.missingData) {
-        hint = `${modeDiagnostic.missingData} ????????????????????????????`;
+        hint = `${modeDiagnostic.missingData} 个候选因必要行情或指标数据不足，无法判定；请展开扫描诊断`;
       } else if (modeDiagnostic?.conditionsNotMet) {
-        hint = `${modeDiagnostic.conditionsNotMet} ??????????????????????????`;
+        hint = `${modeDiagnostic.conditionsNotMet} 个候选未通过全部条件；请展开扫描诊断查看各条件通过数`;
       } else if (diagnostic.selectedMarkets === 0) {
-        hint = "?????????????";
+        hint = "当前扫描范围内没有可用合约";
       }
     }
-    body.innerHTML = `<tr class="empty-row"><td colspan="9"><div class="empty-state"><div class="empty-mark">?</div><strong>${waiting ? "????????" : "??????????"}</strong><span>${hint}</span></div></td></tr>`;
+    body.innerHTML = `<tr class="empty-row"><td colspan="9"><div class="empty-state"><div class="empty-mark">∅</div><strong>${waiting ? "等待官网清单核验" : "没有符合条件的交易对"}</strong><span>${hint}</span></div></td></tr>`;
     return;
   }
   body.innerHTML = results.map(item => {
     const changeClass = item.change24h >= 0 ? "positive" : "negative";
     const chartTimeframe = item.timeframes?.[0] || data.timeframe || "1h";
-    return `<tr><td><div class="pair-actions">${renderTradeLink(item)}${renderChartButton(item, chartTimeframe, "screen")}</div><span class="pair-sub">${item.quote} ??</span></td><td class="mono">${formatNumber(item.price, 8)}</td><td class="mono ${changeClass}">${item.change24h >= 0 ? "+" : ""}${formatNumber(item.change24h, 2)}%</td><td class="mono">${formatVolume(item.volume24h)}</td><td class="mono">${formatNumber(item.ema20, 8)}</td><td class="mono">${formatNumber(item.ma20, 8)}</td><td><span class="band-value">${formatNumber(item.bbLower, 6)} <i>?</i> ${formatNumber(item.bbUpper, 6)}</span><span class="pair-sub">?? ${formatNumber(item.bbWidth, 2)}%</span></td><td>${renderKeyLevelSummary(item.keyLevelsByTimeframe)}</td><td><span class="data-ok">${item.timeframes?.join(" / ") || "?"}</span><span class="pair-sub">${item.candles || 0} ? K ?</span></td></tr>`;
+    return `<tr><td><div class="pair-actions">${renderTradeLink(item)}${renderChartButton(item, chartTimeframe, "screen")}</div><span class="pair-sub">${item.quote} 永续</span></td><td class="mono">${formatNumber(item.price, 8)}</td><td class="mono ${changeClass}">${item.change24h >= 0 ? "+" : ""}${formatNumber(item.change24h, 2)}%</td><td class="mono">${formatVolume(item.volume24h)}</td><td class="mono">${formatNumber(item.ema20, 8)}</td><td class="mono">${formatNumber(item.ma20, 8)}</td><td><span class="band-value">${formatNumber(item.bbLower, 6)} <i>—</i> ${formatNumber(item.bbUpper, 6)}</span><span class="pair-sub">宽度 ${formatNumber(item.bbWidth, 2)}%</span></td><td>${renderKeyLevelSummary(item.keyLevelsByTimeframe)}</td><td><span class="data-ok">${item.timeframes?.join(" / ") || "—"}</span><span class="pair-sub">${item.candles || 0} 根 K 线</span></td></tr>`;
   }).join("");
 }
 
@@ -686,14 +686,14 @@ async function loadCarouselDisplays() {
   try {
     const data = await requestJson("/api/displays", {}, { timeoutMs: 10000, retries: 1 });
     select.innerHTML = (data.displays || []).map(display =>
-      `<option value="${display.index}">${escapeHtml(display.name || `??? ${display.index + 1}`)}${display.primary ? "???" : ""} ? ${display.width || "??"}?${display.height || ""}</option>`
+      `<option value="${display.index}">${escapeHtml(display.name || `显示器 ${display.index + 1}`)}${display.primary ? "（主）" : ""} · ${display.width || "窗口"}×${display.height || ""}</option>`
     ).join("");
     for (const [index, display] of (data.displays || []).entries()) {
       const option = select.options[index];
-      if (option) option.textContent = `??? ${Number(display.screenNumber) || Number(display.index) + 1}${display.primary ? "????" : ""} ? ${display.width || "??"}?${display.height || ""}`;
+      if (option) option.textContent = `显示屏 ${Number(display.screenNumber) || Number(display.index) + 1}${display.primary ? "（主屏）" : ""} · ${display.width || "窗口"}×${display.height || ""}`;
     }
   } catch (error) {
-    select.innerHTML = "<option value=\"0\">?????????????</option>";
+    select.innerHTML = "<option value=\"0\">当前窗口（无法读取显示器）</option>";
     $("#carouselStatus").textContent = error.message;
   }
 }
@@ -707,21 +707,21 @@ async function startCarouselFromPanel(sourceOverride) {
   if (sourceOverride) $("#carouselSource").value = sourceOverride;
   button.disabled = true;
   rankButton.disabled = true;
-  status.textContent = "?????????";
+  status.textContent = "正在准备轮播窗口…";
   try {
     const selection = carouselSelection();
     const { mode, results } = selection;
     if (!results.length) {
       const message = selection.source === "ranking"
-        ? "???????????????????????????????????"
-        : "??????????????????????";
+        ? "当前没有通过官网合约自检的涨跌幅排行结果，请先更新排序并等待自检完成。"
+        : "当前模式没有可轮播的筛选结果，请先完成筛选。";
       status.textContent = message;
       $("#message").textContent = message;
       $("#message").classList.remove("hidden");
       return;
     }
     const interval = Math.max(5, Math.min(3600, Number($("#carouselInterval").value) || 15));
-    status.textContent = "?????????";
+    status.textContent = "正在启动轮播窗口…";
     const data = await requestJson("/api/carousel", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -738,7 +738,7 @@ async function startCarouselFromPanel(sourceOverride) {
       }),
     }, { timeoutMs: 15000, retries: 0 });
     const skipped = Number(data.skippedCount) || 0;
-    status.textContent = `??? ${Number(data.startedCount) || results.length} ????????? ${data.pid}?${skipped ? `???? ${skipped} ??????` : ""}`;
+    status.textContent = `已启动 ${Number(data.startedCount) || results.length} 个交易对轮播（进程 ${data.pid}）${skipped ? `，已跳过 ${skipped} 个已下架合约` : ""}`;
   } catch (error) {
     status.textContent = error.message;
   } finally {
@@ -760,16 +760,16 @@ function renderScreeningDiagnostics(data, mode) {
   }
   const current = diagnostics[mode] || { matched: 0, conditionsNotMet: 0, missingData: 0 };
   $("#screenDiagnosticsSummary").textContent =
-    `???? ${selected} ??24h ?????? ${diagnostics.tickerFiltered || 0} ???? K ??? ${diagnostics.candleCandidates || 0} ??` +
-    `??${mode === "live" ? "??" : "??"}????? ${current.matched} ??????? ${current.conditionsNotMet} ?????? ${current.missingData} ??`;
+    `扫描范围 ${selected} 个；24h 行情预筛排除 ${diagnostics.tickerFiltered || 0} 个；进入 K 线筛选 ${diagnostics.candleCandidates || 0} 个。` +
+    `当前${mode === "live" ? "实时" : "收盘"}模式：通过 ${current.matched} 个、条件未满足 ${current.conditionsNotMet} 个、数据不足 ${current.missingData} 个。`;
   const conditionRows = (diagnostics.conditions || []).map(item => {
     const close = item.close || {};
     const live = item.live || {};
-    return `<li>${escapeHtml(item.label)}????? ${close.passed || 0} / ??? ${close.notMet || 0} / ?? ${close.missing || 0}????? ${live.passed || 0} / ??? ${live.notMet || 0} / ?? ${live.missing || 0}</li>`;
+    return `<li>${escapeHtml(item.label)}：收盘通过 ${close.passed || 0} / 未满足 ${close.notMet || 0} / 缺数 ${close.missing || 0}；实时通过 ${live.passed || 0} / 未满足 ${live.notMet || 0} / 缺数 ${live.missing || 0}</li>`;
   });
   $("#screenDiagnosticsConditions").innerHTML = conditionRows.length
     ? conditionRows.join("")
-    : "<li>???????</li>";
+    : "<li>未设置筛选条件</li>";
   panel.classList.remove("hidden");
 }
 
@@ -813,25 +813,25 @@ function applyChartIndicators(indicators) {
   if (bb?.deviations) $("#chartIndicatorBbDeviation").value = bb.deviations;
 }
 const chartKeyLevelNames = new Map([
-  ["support_exists", "??????"], ["resistance_exists", "??????"],
-  ["high_quality_support", "?????"], ["high_quality_resistance", "?????"],
-  ["support_hammer_rejection", "???????"],
-  ["resistance_inverted_hammer_rejection", "????????"],
-  ["support_near", "??????"], ["resistance_near", "??????"],
-  ["support_touch", "??????"], ["resistance_touch", "??????"],
-  ["support_break", "??????"], ["resistance_break", "??????"],
-  ["support_retest", "??????"], ["resistance_retest", "??????"],
-  ["price_above_vwap", "?????? VWAP"], ["price_below_vwap", "?????? VWAP"],
-  ["price_above_previous_day_high", "????????"], ["price_below_previous_day_low", "????????"],
-  ["price_above_previous_week_high", "????????"], ["price_below_previous_week_low", "????????"],
-  ["price_above_day_open", "????????"], ["price_below_day_open", "????????"],
+  ["support_exists", "存在支撑区域"], ["resistance_exists", "存在压力区域"],
+  ["high_quality_support", "高质量支撑"], ["high_quality_resistance", "高质量压力"],
+  ["support_hammer_rejection", "支撑锤型线拒绝"],
+  ["resistance_inverted_hammer_rejection", "压力位长上影拒绝"],
+  ["support_near", "价格接近支撑"], ["resistance_near", "价格接近压力"],
+  ["support_touch", "收盘触碰支撑"], ["resistance_touch", "收盘触碰压力"],
+  ["support_break", "收盘跌破支撑"], ["resistance_break", "收盘突破压力"],
+  ["support_retest", "支撑回踩确认"], ["resistance_retest", "压力回踩确认"],
+  ["price_above_vwap", "价格高于会话 VWAP"], ["price_below_vwap", "价格低于会话 VWAP"],
+  ["price_above_previous_day_high", "价格高于前日高点"], ["price_below_previous_day_low", "价格低于前日低点"],
+  ["price_above_previous_week_high", "价格高于前周高点"], ["price_below_previous_week_low", "价格低于前周低点"],
+  ["price_above_day_open", "价格高于当日开盘"], ["price_below_day_open", "价格低于当日开盘"],
 ]);
 const chartIndicatorNames = {
-  price: "??", change24h: "24h ???", volume24h: "24h ???",
-  ma: "MA", ema: "EMA", rsi: "RSI", bb_upper: "????", bb_middle: "????",
-  bb_lower: "????", bb_width: "????", key_levels: "?????",
+  price: "价格", change24h: "24h 涨跌幅", volume24h: "24h 成交额",
+  ma: "MA", ema: "EMA", rsi: "RSI", bb_upper: "布林上轨", bb_middle: "布林中轨",
+  bb_lower: "布林下轨", bb_width: "布林带宽", key_levels: "关键位指标",
 };
-const chartOperatorNames = { ">": ">", ">=": "?", "<": "<", "<=": "?", "=": "=", "!=": "?" };
+const chartOperatorNames = { ">": ">", ">=": "≥", "<": "<", "<=": "≤", "=": "=", "!=": "≠" };
 const chartColors = ["#4c8bf5", "#f2a900", "#c678dd", "#f07178", "#56b6c2", "#98c379", "#e06c75"];
 
 async function requestJson(url, options = {}, { timeoutMs = 30000, retries = 1 } = {}) {
@@ -846,10 +846,10 @@ async function requestJson(url, options = {}, { timeoutMs = 30000, retries = 1 }
       try {
         data = text ? JSON.parse(text) : {};
       } catch {
-        throw new Error("??????????????????????");
+        throw new Error("服务返回了无法识别的数据，请刷新页面后重试。");
       }
       if (!response.ok) {
-        const error = new Error(data.error || `?????HTTP ${response.status}?`);
+        const error = new Error(data.error || `请求失败（HTTP ${response.status}）`);
         error.retryable = [408, 429, 500, 502, 503, 504].includes(response.status);
         throw error;
       }
@@ -859,7 +859,7 @@ async function requestJson(url, options = {}, { timeoutMs = 30000, retries = 1 }
       const retryable = error.name === "TypeError" || error.retryable;
       if (!retryable || attempt >= retries) {
         if (error.name === "AbortError") {
-          throw new Error(`?????? ${Math.round(timeoutMs / 1000)} ??????????????????????`);
+          throw new Error(`请求等待超过 ${Math.round(timeoutMs / 1000)} 秒，服务可能仍在处理；可稍后查看结果或重试。`);
         }
         throw error;
       }
@@ -868,7 +868,7 @@ async function requestJson(url, options = {}, { timeoutMs = 30000, retries = 1 }
       clearTimeout(timeout);
     }
   }
-  throw lastError || new Error("????");
+  throw lastError || new Error("请求失败");
 }
 
 async function requestWithRetry(url, options = {}, { timeoutMs = 30000, retries = 1 } = {}) {
@@ -882,11 +882,11 @@ async function requestWithRetry(url, options = {}, { timeoutMs = 30000, retries 
         return response;
       }
       await response.body?.cancel();
-      lastError = new Error(`?????HTTP ${response.status}?`);
+      lastError = new Error(`请求失败（HTTP ${response.status}）`);
     } catch (error) {
       lastError = error;
       if (error.name === "AbortError") {
-        throw new Error(`?????? ${Math.round(timeoutMs / 1000)} ??????????????????????`);
+        throw new Error(`请求等待超过 ${Math.round(timeoutMs / 1000)} 秒，服务可能仍在处理；可稍后查看结果或重试。`);
       }
       if (error.name !== "TypeError") throw error;
       if (attempt >= retries) throw error;
@@ -895,11 +895,11 @@ async function requestWithRetry(url, options = {}, { timeoutMs = 30000, retries 
     }
     await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)));
   }
-  throw lastError || new Error("????");
+  throw lastError || new Error("请求失败");
 }
 
 function chartIndicatorLabel(name, period) {
-  const base = chartIndicatorNames[name] || name || "??";
+  const base = chartIndicatorNames[name] || name || "指标";
   return ["ma", "ema", "rsi", "bb_upper", "bb_middle", "bb_lower", "bb_width"].includes(name)
     ? `${base}${period || 20}` : base;
 }
@@ -909,19 +909,19 @@ function chartConditionLabel(condition) {
     const signal = chartKeyLevelNames.get(condition.keyLevelSignal) || condition.keyLevelSignal;
     const threshold = condition.keyLevelThreshold;
     if (["support_hammer_rejection", "resistance_inverted_hammer_rejection"].includes(condition.keyLevelSignal)) {
-      return `${signal} ? ${formatNumber(threshold, 1)} ? ??${condition.keyLevelLookbackBars || 24}?`;
+      return `${signal} ≥ ${formatNumber(threshold, 1)} · 回看${condition.keyLevelLookbackBars || 24}根`;
     }
-    if (condition.keyLevelSignal?.startsWith("high_quality_") && threshold !== undefined) return `${signal} ? ${formatNumber(threshold, 1)}`;
-    if (condition.keyLevelSignal?.endsWith("_near") && threshold !== undefined) return `${signal} ? ${formatNumber(threshold, 2)} ATR`;
+    if (condition.keyLevelSignal?.startsWith("high_quality_") && threshold !== undefined) return `${signal} ≥ ${formatNumber(threshold, 1)}`;
+    if (condition.keyLevelSignal?.endsWith("_near") && threshold !== undefined) return `${signal} ≤ ${formatNumber(threshold, 2)} ATR`;
     return signal;
   }
   const left = chartIndicatorLabel(condition.indicator, condition.period);
-  if (condition.valueType === "boolean") return `${left} ${chartOperatorNames[condition.operator] || condition.operator} ${condition.booleanValue ? "?" : "?"}`;
+  if (condition.valueType === "boolean") return `${left} ${chartOperatorNames[condition.operator] || condition.operator} ${condition.booleanValue ? "是" : "否"}`;
   const right = condition.valueType === "indicator"
     ? chartIndicatorLabel(condition.valueIndicator, condition.valuePeriod)
     : formatNumber(condition.value, 4);
   if (condition.operator === "within_percent") {
-    return `${left} ?? ${right} ??? ${formatNumber(condition.value, 2)}%`;
+    return `${left} 距离 ${right} 不超过 ${formatNumber(condition.value, 2)}%`;
   }
   return `${left} ${chartOperatorNames[condition.operator] || condition.operator} ${right}`;
 }
@@ -933,7 +933,7 @@ function updateChartReadout(data) {
   if (!rows.length) {
     const label = document.createElement("span");
     label.className = "chart-condition-empty";
-    label.textContent = "??????????";
+    label.textContent = "此圖表未附加篩選條件";
     target.appendChild(label);
     return;
   }
@@ -941,9 +941,9 @@ function updateChartReadout(data) {
     const chip = document.createElement("span");
     const pass = chartState.mode === "live" ? condition.livePass : condition.closePass;
     chip.className = `chart-condition-chip${condition.onChart ? (pass ? " is-pass" : " is-fail") : " is-muted"}`;
-    chip.textContent = `${condition.timeframe} ? ${chartConditionLabel(condition)}${condition.onChart ? ` ? ${pass ? "??" : "???"}` : " ? ????"}`;
+    chip.textContent = `${condition.timeframe} · ${chartConditionLabel(condition)}${condition.onChart ? ` · ${pass ? "符合" : "不符合"}` : " · 其他周期"}`;
     if (condition.onChart && condition.closeValue !== undefined) {
-      chip.title = `??? ${formatNumber(condition.closeValue, 8)} ? ??? ${formatNumber(condition.liveValue, 8)}`;
+      chip.title = `收盘值 ${formatNumber(condition.closeValue, 8)} · 实时值 ${formatNumber(condition.liveValue, 8)}`;
     }
     target.appendChild(chip);
   });
@@ -965,19 +965,19 @@ function updateChartLevelReadout(data) {
     : (zone.top + zone.bottom) / 2 >= price - tolerance)[0];
   const table = document.createElement("table");
   table.className = "chart-level-table";
-  table.innerHTML = "<thead><tr><th>??</th><th>????</th><th>?? / ??</th></tr></thead>";
+  table.innerHTML = "<thead><tr><th>区域</th><th>价格范围</th><th>评分 / 触碰</th></tr></thead>";
   const body = document.createElement("tbody");
   const precision = data.pricePrecision ?? 8;
-  for (const [kind, label, className] of [[-1, "??", "resistance"], [1, "??", "support"]]) {
+  for (const [kind, label, className] of [[-1, "压力", "resistance"], [1, "支撑", "support"]]) {
     const zone = nearest(kind);
     const row = document.createElement("tr");
     row.className = className;
     const region = document.createElement("th");
-    region.textContent = zone?.awaitingRetest ? `${label}??` : label;
+    region.textContent = zone?.awaitingRetest ? `${label}候选` : label;
     const range = document.createElement("td");
-    range.textContent = zone ? `${formatNumber(zone.bottom, precision)} ? ${formatNumber(zone.top, precision)}` : "?";
+    range.textContent = zone ? `${formatNumber(zone.bottom, precision)} – ${formatNumber(zone.top, precision)}` : "—";
     const score = document.createElement("td");
-    score.textContent = zone ? `${formatNumber(zone.score, 0)} / T${formatNumber(zone.touches, 0)}${zone.containsHtf ? " ? HTF" : ""}` : "?";
+    score.textContent = zone ? `${formatNumber(zone.score, 0)} / T${formatNumber(zone.touches, 0)}${zone.containsHtf ? " · HTF" : ""}` : "—";
     if (zone?.score >= 75) score.classList.add("is-strong");
     row.append(region, range, score);
     body.appendChild(row);
@@ -1001,7 +1001,7 @@ function renderChartLegend(indicators, zoneSeries, events) {
   volumeEntry.className = "chart-legend-item";
   const volumeSwatch = document.createElement("i");
   volumeSwatch.className = "chart-volume-swatch";
-  volumeEntry.append(volumeSwatch, document.createTextNode("???"));
+  volumeEntry.append(volumeSwatch, document.createTextNode("成交量"));
   target.appendChild(volumeEntry);
   indicators.forEach(seriesEntry => {
     const { plot, index, latestValue } = seriesEntry;
@@ -1020,7 +1020,7 @@ function renderChartLegend(indicators, zoneSeries, events) {
     seriesEntry.valueElement = value;
   });
   if (zoneSeries?.length) {
-    for (const [kind, label, color] of [[1, "????", "#26a69a"], [-1, "????", "#ef5350"]]) {
+    for (const [kind, label, color] of [[1, "支撑区域", "#26a69a"], [-1, "压力区域", "#ef5350"]]) {
       if (!zoneSeries.some(zone => zone.kind === kind)) continue;
       const entry = document.createElement("span");
       entry.className = "chart-legend-item";
@@ -1033,7 +1033,7 @@ function renderChartLegend(indicators, zoneSeries, events) {
   if (events?.length) {
     const entry = document.createElement("span");
     entry.className = "chart-legend-item chart-event-legend";
-    entry.textContent = "? ???? / ? ?????";
+    entry.textContent = "● 触碰　↓ / ↑ 突破或回踩";
     target.appendChild(entry);
   }
   if (!target.childElementCount) target.classList.add("hidden");
@@ -1061,7 +1061,7 @@ function updateChartOhlc(candle, volume, time, fallback) {
   }
   const precision = chartData?.pricePrecision ?? 8;
   const changeClass = Number(point.close) >= Number(point.open) ? "positive" : "negative";
-  for (const [label, key] of [["?", "open"], ["?", "high"], ["?", "low"], ["?", "close"]]) {
+  for (const [label, key] of [["开", "open"], ["高", "high"], ["低", "low"], ["收", "close"]]) {
     const cell = document.createElement("span");
     cell.className = `chart-ohlc-cell${key === "close" ? ` ${changeClass}` : ""}`;
     const name = document.createElement("i");
@@ -1074,7 +1074,7 @@ function updateChartOhlc(candle, volume, time, fallback) {
   const volumeCell = document.createElement("span");
   volumeCell.className = "chart-ohlc-cell chart-ohlc-volume";
   const volumeName = document.createElement("i");
-  volumeName.textContent = "?";
+  volumeName.textContent = "量";
   const volumeValue = document.createElement("b");
   volumeValue.textContent = formatVolume(volume?.value ?? point.volume);
   volumeCell.append(volumeName, volumeValue);
@@ -1233,9 +1233,9 @@ function drawChart(data, preserveRange = false) {
   if (data.events?.length) candles.setMarkers(data.events);
   const features = chartState.mode === "live" ? data.liveFeatures : data.closeFeatures;
   const referenceLines = [
-    ["kl_previous_day_high", "???", "#8a9996"], ["kl_previous_day_low", "???", "#8a9996"],
-    ["kl_previous_week_high", "???", "#a07e2e"], ["kl_previous_week_low", "???", "#a07e2e"],
-    ["kl_day_open", "????", "#557eae"], ["kl_session_vwap", "?? VWAP", "#865aa1"],
+    ["kl_previous_day_high", "前日高", "#8a9996"], ["kl_previous_day_low", "前日低", "#8a9996"],
+    ["kl_previous_week_high", "前周高", "#a07e2e"], ["kl_previous_week_low", "前周低", "#a07e2e"],
+    ["kl_day_open", "当日开盘", "#557eae"], ["kl_session_vwap", "会话 VWAP", "#865aa1"],
   ];
   for (const [key, title, color] of referenceLines) {
     const value = Number(features?.[key]);
@@ -1244,7 +1244,7 @@ function drawChart(data, preserveRange = false) {
   }
   const livePrice = Number(data.livePrice);
   if (Number.isFinite(livePrice)) {
-    candles.createPriceLine({ price: livePrice, color: "#f5a623", lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: "???" });
+    candles.createPriceLine({ price: livePrice, color: "#f5a623", lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: "实时价" });
   }
   const candleLows = candleData.map(item => item.low);
   const candleHighs = candleData.map(item => item.high);
@@ -1351,7 +1351,7 @@ async function refreshChart({ preserveRange = false } = {}) {
       body: JSON.stringify(requestState),
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "????????");
+    if (!response.ok) throw new Error(data.error || "本地图表加载失败");
     if (chartState.instId !== requestState.instId
       || chartState.timeframe !== requestState.timeframe
       || chartState.mode !== requestState.mode
@@ -1363,8 +1363,8 @@ async function refreshChart({ preserveRange = false } = {}) {
     chartData = data;
     $("#chartStatus").classList.add("hidden");
     $("#chartTitle").textContent = data.symbol;
-    $("#chartSubtitle").textContent = `${data.timeframe} ? ${data.candles.length} ? K ? ? ${chartState.mode === "live" ? "????" : "????"}`;
-    $("#chartQuote").textContent = `?? ${formatNumber(data.livePrice, data.pricePrecision)}????? ${formatNumber(data.closePrice, data.pricePrecision)}`;
+    $("#chartSubtitle").textContent = `${data.timeframe} · ${data.candles.length} 根 K 线 · ${chartState.mode === "live" ? "实时价格" : "收盘数据"}`;
+    $("#chartQuote").textContent = `实时 ${formatNumber(data.livePrice, data.pricePrecision)}　·　收盘 ${formatNumber(data.closePrice, data.pricePrecision)}`;
     $("#chartTradeLink").href = `/trade?${new URLSearchParams({ instId: data.instId })}`;
     document.querySelectorAll("[data-chart-mode]").forEach(button => button.classList.toggle("active", button.dataset.chartMode === chartState.mode));
     updateChartReadout(data);
@@ -1372,7 +1372,7 @@ async function refreshChart({ preserveRange = false } = {}) {
     drawChart(data, preserveRange);
   } catch (error) {
     if (priceChart) {
-      $("#chartStatus").textContent = `?????? ? ${error.message}`;
+      $("#chartStatus").textContent = `行情暂未更新 · ${error.message}`;
       $("#chartStatus").classList.remove("hidden");
     } else {
       $("#chartMessage").textContent = error.message;
@@ -1401,7 +1401,7 @@ function openChart(button) {
   };
   const query = new URLSearchParams({
     instId: state.instId,
-    symbol: button.dataset.symbol || "???",
+    symbol: button.dataset.symbol || "交易对",
     timeframe: state.timeframe,
     mode: state.mode,
     conditions: JSON.stringify(state.conditions),
@@ -1429,13 +1429,13 @@ function startStandaloneChart() {
   };
   applyChartIndicators(chartState.chartIndicators);
   $("#chartTimeframe").value = timeframe;
-  $("#chartTitle").textContent = query.get("symbol") || "???";
-  $("#chartSubtitle").textContent = "???????";
+  $("#chartTitle").textContent = query.get("symbol") || "交易对";
+  $("#chartSubtitle").textContent = "正在加载行情…";
   $("#chartQuote").textContent = "";
   $("#chartStatus").classList.add("hidden");
   $("#chartMessage").classList.add("hidden");
   $("#chartTradeLink").href = `/trade?${new URLSearchParams({ instId: chartState.instId })}`;
-  document.title = `${query.get("symbol") || "???"} ? Deepcoin ??`;
+  document.title = `${query.get("symbol") || "交易对"} · Deepcoin 图表`;
   updateChartReadout({ conditions: chartConditions });
   $("#chartDialog").showModal();
   window.requestAnimationFrame(() => refreshChart());
@@ -1455,13 +1455,13 @@ function startCarouselPage() {
     const previousButton = document.createElement("button");
     previousButton.id = "carouselPrevious";
     previousButton.type = "button";
-    previousButton.textContent = "???";
+    previousButton.textContent = "上一个";
     nextButton.parentElement.insertBefore(previousButton, nextButton);
   }
   const startWithQuery = resolvedQuery => {
     carouselItems = (resolvedQuery.get("instIds") || "").split(",").map(item => item.trim()).filter(Boolean);
     if (!carouselItems.length) {
-      $("#chartMessage").textContent = "?????????";
+      $("#chartMessage").textContent = "没有可轮播的交易对";
       $("#chartMessage").classList.remove("hidden");
       return;
     }
@@ -1482,7 +1482,7 @@ function startCarouselPage() {
 
 function startCarouselWithResolvedQuery(query) {
   if (!carouselItems.length) {
-    $("#chartMessage").textContent = "?????????";
+    $("#chartMessage").textContent = "没有可轮播的交易对";
     $("#chartMessage").classList.remove("hidden");
     return;
   }
@@ -1509,17 +1509,17 @@ function startCarouselWithResolvedQuery(query) {
     };
     const firstDelay = Math.max(1, Math.min(rankRefreshSeconds, Number(query.get("rankFirstRefreshSeconds")) || rankRefreshSeconds));
     scheduleCarouselRankingRefresh(firstDelay);
-    $("#carouselRankStatus").textContent = `?? ${carouselRankConfig.timeframe} ? ${rankRefreshSeconds} ???`;
+    $("#carouselRankStatus").textContent = `榜单 ${carouselRankConfig.timeframe} · ${rankRefreshSeconds} 秒重排`;
   } else {
     carouselRankConfig = null;
-    $("#carouselRankStatus").textContent = "????";
+    $("#carouselRankStatus").textContent = "固定列表";
   }
   $("#chartTimeframe").value = chartState.timeframe;
   $("#chartTradeLink").href = `/trade?${new URLSearchParams({ instId: chartState.instId })}`;
   $("#chartDialog").showModal();
   $("#carouselOverlay").classList.remove("hidden");
-  $("#carouselPosition").textContent = `?? 1 / ${carouselItems.length}`;
-  document.title = "Deepcoin ????";
+  $("#carouselPosition").textContent = `轮播 1 / ${carouselItems.length}`;
+  document.title = "Deepcoin 图表轮播";
   window.requestAnimationFrame(() => refreshChart());
   clearInterval(chartRefreshTimer);
   chartRefreshTimer = setInterval(() => refreshChart({ preserveRange: true }), 15000);
@@ -1536,7 +1536,7 @@ async function refreshCarouselRanking() {
   if (!carouselRankConfig || carouselPaused || carouselRankBusy) return;
   carouselRankBusy = true;
   const config = carouselRankConfig;
-  $("#carouselRankStatus").textContent = "?????";
+  $("#carouselRankStatus").textContent = "榜单更新中";
   try {
     const query = new URLSearchParams({
       quote: config.quote,
@@ -1551,9 +1551,9 @@ async function refreshCarouselRanking() {
       retries: 1,
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "?????????");
+    if (!response.ok) throw new Error(data.error || "涨跌幅榜单更新失败");
     const nextItems = (data.results || []).map(item => item.instId).filter(Boolean);
-    if (!nextItems.length) throw new Error("???????????????????");
+    if (!nextItems.length) throw new Error("本次没有可用榜单，继续使用上一批交易对");
     const currentId = chartState?.instId;
     const currentIndex = carouselIndex;
     carouselItems = nextItems;
@@ -1565,10 +1565,10 @@ async function refreshCarouselRanking() {
       chartState.instId = carouselItems[carouselIndex];
       await refreshChart({ preserveRange: true });
     }
-    $("#carouselPosition").textContent = `?? ${carouselIndex + 1} / ${carouselItems.length}`;
-    $("#carouselRankStatus").textContent = `????? ${new Date(data.updatedAt || Date.now()).toLocaleTimeString("zh-CN")}`;
+    $("#carouselPosition").textContent = `轮播 ${carouselIndex + 1} / ${carouselItems.length}`;
+    $("#carouselRankStatus").textContent = `榜单已更新 ${new Date(data.updatedAt || Date.now()).toLocaleTimeString("zh-CN")}`;
   } catch (error) {
-    $("#carouselRankStatus").textContent = `?????? ? ${error.message}`;
+    $("#carouselRankStatus").textContent = `沿用上次榜单 · ${error.message}`;
   } finally {
     carouselRankBusy = false;
     if (carouselRankConfig && !carouselPaused) {
@@ -1583,7 +1583,7 @@ function scheduleNextCarousel() {
   carouselTimer = setTimeout(async () => {
     carouselIndex = (carouselIndex + 1) % carouselItems.length;
     chartState.instId = carouselItems[carouselIndex];
-    $("#carouselPosition").textContent = `?? ${carouselIndex + 1} / ${carouselItems.length}`;
+    $("#carouselPosition").textContent = `轮播 ${carouselIndex + 1} / ${carouselItems.length}`;
     await refreshChart();
     scheduleNextCarousel();
   }, carouselIntervalMs);
@@ -1594,7 +1594,7 @@ async function moveCarousel(step) {
   clearTimeout(carouselTimer);
   carouselIndex = (carouselIndex + step + carouselItems.length) % carouselItems.length;
   chartState.instId = carouselItems[carouselIndex];
-  $("#carouselPosition").textContent = `?? ${carouselIndex + 1} / ${carouselItems.length}`;
+  $("#carouselPosition").textContent = `轮播 ${carouselIndex + 1} / ${carouselItems.length}`;
   await refreshChart();
   scheduleNextCarousel();
 }
@@ -1631,36 +1631,36 @@ async function runScreen({ silent = false } = {}) {
   refreshButton.disabled = true;
   button.setAttribute("aria-busy", "true");
   if (!silent) {
-    button.innerHTML = `<span class="spinner"></span> ??????`;
-    button.title = "???????????????";
+    button.innerHTML = `<span class="spinner"></span> 正在扫描行情`;
+    button.title = "正在获取行情并逐项检查筛选条件";
     message.classList.add("hidden");
   } else {
-    button.innerHTML = `<span class="spinner"></span> ?????`;
-    button.title = "???????????????";
+    button.innerHTML = `<span class="spinner"></span> 自动重筛中`;
+    button.title = "自动筛选正在获取行情并检查条件";
   }
   try {
     const response = await requestWithRetry("/api/screen", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
     }, { timeoutMs: 300000, retries: 1 });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "????");
+    if (!response.ok) throw new Error(data.error || "筛选失败");
     message.classList.add("hidden");
     lastData = data;
     renderResults(data, activeMode);
     void loadMarketAudit();
     if (data.unavailableSymbols?.length) {
-      message.textContent = `${data.unavailableSymbols.join("?")} ????????????????????????????????????????`;
+      message.textContent = `${data.unavailableSymbols.join("、")} 未通过当前官网交易清单核验，请展开“核验明细”查看原因；未将它们当作条件不匹配。`;
       message.classList.remove("hidden");
     }
   } catch (error) {
-    message.textContent = error.name === "TypeError" ? "?????????????? http://127.0.0.1:8000 ??????????" : error.message;
+    message.textContent = error.name === "TypeError" ? "无法连接本地筛选服务，请确认 http://127.0.0.1:8000 仍在运行后刷新页面。" : error.message;
     message.classList.remove("hidden");
   } finally {
     screenBusy = false;
     button.disabled = false;
     refreshButton.disabled = false;
     button.removeAttribute("aria-busy");
-    button.innerHTML = `<span class="button-icon">?</span>????`;
+    button.innerHTML = `<span class="button-icon">⌕</span>开始筛选`;
     button.title = "";
   }
 }
@@ -1675,18 +1675,18 @@ async function checkHealth() {
   const status = $(".live-status");
   try {
     const response = await fetch("/api/health");
-    if (!response.ok) throw new Error("????????");
+    if (!response.ok) throw new Error("本地服务响应异常");
     const health = await response.json();
     const connected = health.exchangeConnected === true;
     status.classList.toggle("has-error", !connected && health.marketDirectoryStatus === "error");
     $("#healthText").textContent = connected
-      ? "Deepcoin ???"
-      : health.marketDirectoryStatus === "error" ? "Deepcoin ????" : "???? Deepcoin";
-    status.title = connected ? "Deepcoin ????????????" : (health.marketDirectoryError || "?????? Deepcoin ????");
+      ? "Deepcoin 已连接"
+      : health.marketDirectoryStatus === "error" ? "Deepcoin 接口异常" : "正在连接 Deepcoin";
+    status.title = connected ? "Deepcoin 行情与官网合约清单已核验" : (health.marketDirectoryError || "正在首次核验 Deepcoin 合约清单");
   } catch (error) {
     status.classList.add("has-error");
-    $("#healthText").textContent = "??????";
-    status.title = error.message || "??????????";
+    $("#healthText").textContent = "本地服务异常";
+    status.title = error.message || "无法连接本地筛选服务";
   }
 }
 
@@ -1697,28 +1697,28 @@ async function checkForUpdates() {
   updateBusy = true;
   button.disabled = true;
   button.setAttribute("aria-busy", "true");
-  status.textContent = "?????";
+  status.textContent = "正在检查…";
   try {
     const data = await requestJson("/api/update/check", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{}",
     }, { timeoutMs: 20000, retries: 0 });
-    const current = data.currentVersion || "??";
+    const current = data.currentVersion || "未知";
     const latest = data.latestVersion || current;
     if (!data.updateAvailable) {
-      status.textContent = `???? ${current}?????`;
+      status.textContent = `当前版本 ${current}，已是最新`;
     } else if (data.scheduled && data.updateStatus === "downloading") {
-      status.textContent = `?? ${latest}??????????`;
+      status.textContent = `发现 ${latest}，已开始后台下载校验`;
     } else if (data.scheduled) {
-      status.textContent = `?? ${latest}???????`;
+      status.textContent = `发现 ${latest}，正在重启更新`;
     } else if (data.packaged) {
-      status.textContent = `?? ${latest}???????`;
+      status.textContent = `发现 ${latest}，更新未能安排`;
     } else {
-      status.textContent = `?? ${latest}?????????????`;
+      status.textContent = `发现 ${latest}；源码运行请使用发布包更新`;
     }
   } catch (error) {
-    status.textContent = `?????${error.message}`;
+    status.textContent = `检查失败：${error.message}`;
   } finally {
     updateBusy = false;
     button.disabled = false;
@@ -1776,7 +1776,7 @@ $("#carouselSource")?.addEventListener("change", updateCarouselHint);
 $("#carouselMode")?.addEventListener("change", updateCarouselHint);
 $("#carouselPause")?.addEventListener("click", event => {
   carouselPaused = !carouselPaused;
-  event.currentTarget.textContent = carouselPaused ? "??" : "??";
+  event.currentTarget.textContent = carouselPaused ? "继续" : "暂停";
   if (carouselPaused) {
     clearTimeout(carouselRankRefreshTimer);
     clearTimeout(carouselRankStartTimer);
@@ -1789,7 +1789,7 @@ $("#carouselNext")?.addEventListener("click", async () => {
   if (!carouselItems.length || !chartState) return;
   carouselIndex = (carouselIndex + 1) % carouselItems.length;
   chartState.instId = carouselItems[carouselIndex];
-  $("#carouselPosition").textContent = `?? ${carouselIndex + 1} / ${carouselItems.length}`;
+  $("#carouselPosition").textContent = `轮播 ${carouselIndex + 1} / ${carouselItems.length}`;
   await refreshChart();
   scheduleNextCarousel();
 });
@@ -1807,7 +1807,7 @@ document.addEventListener("click", event => {
   if (modeButton && chartState && chartData) {
     chartState.mode = modeButton.dataset.chartMode;
     document.querySelectorAll("[data-chart-mode]").forEach(button => button.classList.toggle("active", button === modeButton));
-    $("#chartSubtitle").textContent = `${chartState.timeframe} ? ${chartData.candles.length} ? K ? ? ${chartState.mode === "live" ? "????" : "????"}`;
+    $("#chartSubtitle").textContent = `${chartState.timeframe} · ${chartData.candles.length} 根 K 线 · ${chartState.mode === "live" ? "实时价格" : "收盘数据"}`;
     updateChartReadout(chartData);
     drawChart(chartData, true);
   }

@@ -63,7 +63,7 @@ class CarouselTests(unittest.TestCase):
         self.assertEqual(len(result["results"]), 1)
         self.assertEqual(result["results"][0]["changePercent"], 10.0)
         self.assertEqual(result["results"][0]["price"], 110.0)
-        self.assertIn("????????", result["errors"][0])
+        self.assertIn("实时价格暂不可用", result["errors"][0])
 
     def test_carousel_skips_only_contracts_removed_after_ranking(self):
         market = {
@@ -197,9 +197,9 @@ class CarouselTests(unittest.TestCase):
 
     def test_carousel_rejects_invalid_interval_and_unknown_market(self):
         with patch.object(app, "fetch_markets", return_value=[]):
-            with self.assertRaisesRegex(ValueError, "?????"):
+            with self.assertRaisesRegex(ValueError, "交易对数量"):
                 app.open_carousel_window({"instIds": []})
-            with self.assertRaisesRegex(ValueError, "??????"):
+            with self.assertRaisesRegex(ValueError, "官网核验目录"):
                 app.open_carousel_window({"instIds": ["UNKNOWN-USDT-SWAP"], "interval": 1})
 
     def test_carousel_starts_browser_with_verified_ids_and_settings(self):
