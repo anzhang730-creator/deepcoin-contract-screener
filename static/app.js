@@ -146,7 +146,10 @@ function verifiedRows(items) {
   // snapshot so a concurrent audit refresh cannot temporarily hide all rows.
   const hasRowVerification = items.some(item => Object.prototype.hasOwnProperty.call(item || {}, "webTradeStatus"));
   if (hasRowVerification) {
-    return items.filter(item => item?.webTradeStatus === "available" && item.webListed === true);
+    // `market_trade_navigation()` exposes the final verified decision as
+    // webTradeStatus; webListed is an internal directory field and is not
+    // included in ranking rows.
+    return items.filter(item => item?.webTradeStatus === "available");
   }
   if (!currentAudit || !Array.isArray(currentAudit.verifiedSymbols)) return items;
   const names = new Set(currentAudit.verifiedSymbols || []);
